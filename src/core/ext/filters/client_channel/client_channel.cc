@@ -1566,9 +1566,21 @@ void ChannelData::ProcessLbPolicy(
     const internal::ClientChannelGlobalParsedConfig* parsed_service_config,
     UniquePtr<char>* lb_policy_name,
     RefCountedPtr<LoadBalancingPolicy::Config>* lb_policy_config) {
-  // Prefer the LB policy name found in the service config.
+  bool found_balancer_address = false;
+  for (size_t i = 0; i < resolver_result.addresses.size(); ++i) {
+    const ServerAddress& address = resolver_result.addresses[i];
+    if (address.IsBalancer()) {
+      found_balancer_address = true;
+      break;
+    }
+  }
+  // Prefer the LB policy name found in the service config unless it is
+  // "grpclb" and there are no balancer addresses.
   if (parsed_service_config != nullptr &&
-      parsed_service_config->parsed_lb_config() != nullptr) {
+      parsed_service_config->parsed_lb_config() != nullptr &&
+      (found_balancer_address ||
+       strcmp(parsed_service_config->parsed_lb_config()->name(),
+              "grpclb") != 0)) {
     lb_policy_name->reset(
         gpr_strdup(parsed_service_config->parsed_lb_config()->name()));
     *lb_policy_config = parsed_service_config->parsed_lb_config();
@@ -1585,14 +1597,6 @@ void ChannelData::ProcessLbPolicy(
   }
   // Special case: If at least one balancer address is present, we use
   // the grpclb policy, regardless of what the resolver has returned.
-  bool found_balancer_address = false;
-  for (size_t i = 0; i < resolver_result.addresses.size(); ++i) {
-    const ServerAddress& address = resolver_result.addresses[i];
-    if (address.IsBalancer()) {
-      found_balancer_address = true;
-      break;
-    }
-  }
   if (found_balancer_address) {
     if (local_policy_name != nullptr &&
         strcmp(local_policy_name, "grpclb") != 0) {
