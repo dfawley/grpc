@@ -43,7 +43,7 @@ gains).
 
 If a client message is compressed by an algorithm that is not supported
 by a server, the message WILL result in an `UNIMPLEMENTED` error status on the
-server. The server will then include a `grpc-accept-encoding` response
+server. The server MAY include a `grpc-accept-encoding` response
 header which specifies the algorithms that the server accepts. If the client
 message is compressed using one of the algorithms from the `grpc-accept-encoding` header
 and an `UNIMPLEMENTED` error status is returned from the server, the cause of the error
@@ -110,9 +110,9 @@ channel compression configuration MUST be used.
 outgoing message, the message MUST be compressed accordingly.
 1. A message compressed by a client in a way not supported by its server MUST
 fail with status `UNIMPLEMENTED`, its associated description indicating the
-unsupported condition as well as the supported ones. The returned
-`grpc-accept-encoding` header MUST NOT contain the compression method
-(encoding) used.
+unsupported condition as well as the supported ones. If a
+`grpc-accept-encoding` header is returned, it MUST NOT contain the compression
+method (encoding) used.
 1. A message compressed by a server in a way not supported by its client MUST
 fail with status `INTERNAL`, its associated description indicating the
 unsupported condition as well as the supported ones. The returned
