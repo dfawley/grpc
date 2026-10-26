@@ -20,8 +20,7 @@ channel, we use a state machine with five states, defined below:
 
 CONNECTING: The channel is trying to establish a connection and is waiting to
 make progress on one of the steps involved in name resolution, TCP connection
-establishment or TLS handshake. This may be used as the initial state for channels upon
-creation.
+establishment or TLS handshake.
 
 READY: The channel has successfully established a connection all the way through
 TLS handshake (or equivalent) and protocol-level (HTTP/2, etc) handshaking, and
@@ -30,7 +29,7 @@ known failure).
 
 TRANSIENT_FAILURE: There has been some transient failure (such as a TCP 3-way
 handshake timing out or a socket error). Channels in this state will eventually
-switch to the CONNECTING state and try to establish a connection again. Since
+try to establish a connection again. Since
 retries are done with exponential backoff, channels that fail to connect will
 start out spending very little time in this state but as the attempts fail
 repeatedly, the channel will spend increasingly large amounts of time in this
@@ -43,10 +42,16 @@ connection because of a lack of new or pending RPCs. New RPCs  MAY be created
 in this state. Any attempt to start an RPC on the channel will push the channel
 out of this state to connecting. When there has been no RPC activity on a channel
 for a specified IDLE_TIMEOUT, i.e., no new or pending (active) RPCs for this
-period, channels that are READY or CONNECTING switch to IDLE. Additionally,
-channels that receive a GOAWAY when there are no active or pending RPCs should
-also switch to IDLE to avoid connection overload at servers that are attempting
-to shed connections. We will use a default IDLE_TIMEOUT of 300 seconds (5 minutes).
+period, channels switch to IDLE. We will use a default IDLE_TIMEOUT of 300
+seconds (5 minutes). Channels start in this state upon creation.
+
+When a connection is lost or the server sends a GOAWAY, the load-balancing
+policy decides whether and when to reconnect. With the default `pick_first`
+policy, losing the connection moves the channel to IDLE, and it does not
+reconnect until there is a new RPC or a `try_to_connect` request. This avoids
+connection overload at servers that are attempting to shed connections. Policies
+that keep connections to all endpoints, such as `round_robin`, reconnect right
+away (with backoff).
 
 SHUTDOWN: This channel has started shutting down. Any new RPCs should fail
 immediately. Pending RPCs may continue running till the application cancels them.
@@ -56,8 +61,21 @@ communicate . (As of 6/12/2015, there are no known errors (while connecting or
 communicating) that are classified as non-recoverable.)  Channels that enter this
 state never leave this state.
 
-The following table lists the legal transitions from one state to another and
-corresponding reasons. Empty cells denote disallowed transitions.
+Except for entering and leaving idleness due to IDLE_TIMEOUT and for SHUTDOWN,
+the channel's state is set by its load-balancing policy, usually by aggregating
+the states of its connections. Therefore, the transitions a channel goes through
+depend on the policy in use. The following table lists the generally expected
+transitions from one state to another and corresponding reasons. Load-balancing
+policies should follow it unless they have a specific reason not to. Empty cells
+denote transitions that are not generally expected.
+
+The following rules hold for every channel:
+
+* The initial state is IDLE.
+* Any state can move to SHUTDOWN. SHUTDOWN is final.
+* When the channel leaves idleness due to IDLE_TIMEOUT (or after creation), the
+  next state is CONNECTING.
+* A transition is reported only when the state actually changes.
 
 <table style='border: 1px solid black'>
   <tr>
@@ -78,19 +96,22 @@ corresponding reasons. Empty cells denote disallowed transitions.
   </tr>
   <tr>
     <th>READY</th>
-    <td></td>
+    <td>With some load-balancing policies, all usable connections failed and new
+        connection attempts are in progress.</td>
     <td>Incremental successful communication on established channel.</td>
     <td>Any failure encountered while expecting successful communication on
         established channel.</td>
-    <td>No RPC activity on channel for IDLE_TIMEOUT <br>OR<br>upon receiving a GOAWAY while there are no pending RPCs.</td>
+    <td>No RPC activity on channel for IDLE_TIMEOUT <br>OR<br>the connection was lost or a GOAWAY was received (for load-balancing policies such as `pick_first`).</td>
     <td>Shutdown triggered by application.</td>
   </tr>
   <tr>
     <th>TRANSIENT_FAILURE</th>
-    <td>Wait time required to implement (exponential) backoff is over.</td>
+    <td>Wait time required to implement (exponential) backoff is over (only for
+        load-balancing policies that do not stay in TRANSIENT_FAILURE while
+        reconnecting).</td>
+    <td>A connection attempt made while staying in TRANSIENT_FAILURE succeeded.</td>
     <td></td>
-    <td></td>
-    <td></td>
+    <td>No RPC activity on channel for IDLE_TIMEOUT</td>
     <td>Shutdown triggered by application.</td>
   </tr>
   <tr>
@@ -143,10 +164,10 @@ APIs should have a corresponding method that allows the application to be
 notified when the state of a channel changes.
 
 Note that a notification is delivered every time there is a transition from any
-state to any *other* state. On the other hand the rules for legal state
-transition, require a transition from CONNECTING to TRANSIENT_FAILURE and back
-to CONNECTING for every recoverable failure, even if the corresponding
-exponential backoff requires no wait before retry. The combined effect is that
+state to any *other* state. On the other hand a load-balancing policy may
+transition from CONNECTING to TRANSIENT_FAILURE and back to CONNECTING for a
+recoverable failure, even if the corresponding exponential backoff requires no
+wait before retry. The combined effect is that
 the application may receive state change notifications that appear spurious.
 e.g., an application waiting for state changes on a channel that is CONNECTING
 may receive a state change notification but find the channel in the same
