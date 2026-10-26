@@ -57,8 +57,8 @@ situations in which they are generated.
 | Flow-control protocol violation |	INTERNAL | Both |
 | Error parsing returned status	| UNKNOWN | Client |
 | Incorrect Auth metadata ( Credentials failed to get metadata, Incompatible credentials set on channel and call, Invalid host set in `:authority` metadata, etc.) | UNAUTHENTICATED | Both |
-| Request cardinality violation (method requires exactly one request but client sent some other number of requests) | UNIMPLEMENTED | Server|
-| Response cardinality violation (method requires exactly one response but server sent some other number of responses) | UNIMPLEMENTED | Client|
+| Request cardinality violation (method requires exactly one request but client sent some other number of requests) | INTERNAL | Server|
+| Response cardinality violation (method requires exactly one response but server sent some other number of responses) | INTERNAL | Client|
 | Error parsing response proto	| INTERNAL | Client|
 | Error parsing request proto	| INTERNAL | Server|
 | Sent or received message was larger than configured limit | RESOURCE_EXHAUSTED | Both |
