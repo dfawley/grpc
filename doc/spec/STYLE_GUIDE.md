@@ -1,0 +1,379 @@
+> [!WARNING]
+> This document is part of a new, experimental
+> [gRPC specification](README.md). It was generated primarily by AI and has not
+> yet been fully reviewed.
+
+# gRPC Specification Style Guide
+
+This guide describes how the documents in this directory are written. Follow it
+when adding to or changing the specification.
+
+## 1. Scope and Content
+
+1. **Current behavior only.** Describe how gRPC behaves today. Do not include
+   history ("previously", "gRFC Axx changed …"). Superseded mechanisms are
+   omitted.
+2. **Cross-language behavior only.** The spec covers behavior that is
+   implemented across languages or defined in gRFCs. Never say which languages
+   implement something, and never mention specific implementations by name.
+   Where implementations diverge, the spec states the single desired behavior.
+3. **Never call anything "optional".** Apart from the wire protocol, almost
+   everything in gRPC is optional in practice. Observations about features that
+   some implementations lack belong in
+   [gRPC Spec: Optionality Notes](../spec-optionality-notes.md), not in the spec.
+4. **Experimental features** are included and marked with a line of the form
+   `> **Experimental:** <what is experimental>` (for example, metrics marked
+   experimental, or LB policies whose registered names end in `_experimental`).
+5. **Temporary environment-variable guards** and backward-compatibility opt-outs
+   are never mentioned. Permanent configuration environment variables (such as
+   `GRPC_XDS_BOOTSTRAP`) are documented.
+6. **"Filter"** is used only for the xDS term "xDS HTTP filter". For
+   gRPC-internal mechanisms, use "interceptor" or describe the behavior.
+7. **API requirements.** Each document has an `API Requirements` section
+   stating, abstractly, what applications MUST be able to do through gRPC's
+   public API (for example, "The channel API MUST provide a way to …"). Do not
+   use language-specific names or signatures. Internal plugin APIs (resolver, LB
+   policy, subchannel, picker, and so on) are also specified abstractly.
+8. **Sources.** The spec is derived from the gRFCs (which act as a changelog),
+   the documents in `grpc/doc`, and the protos in `grpc-proto`. Each document
+   lists its sources in an HTML comment under its H1, e.g.
+   `<!-- Sources: A61, A62, doc/load-balancing.md -->`. Apart from feature
+   origin annotations ([Feature Origin Annotations](#5-feature-origin-annotations)),
+   the body text does not cite gRFCs.
+
+## 2. Document Format
+
+- GitHub-flavored Markdown. RFC 2119 keywords are written in uppercase where
+  normative.
+- **Banner.** Every document starts, above its H1, with the `> [!WARNING]`
+  banner stating that it is part of a new, experimental gRPC specification
+  (linked to the top-level README), generated primarily by AI and not yet fully
+  reviewed. The top-level README has a similar banner without the link.
+- **Precision.** Include config field names, JSON names, defaults, limits,
+  validation rules, metadata keys, state machines, algorithms (pseudocode is
+  welcome), and status-code behavior. Prefer tables for field-by-field rules.
+- **External standards.** Behavior that a published non-gRPC standard already
+  defines (for example an IETF RFC for HTTP/2, HTTP/3, QUIC, TLS, URIs, or
+  X.509) is referenced, not restated: cite the standard and section (for
+  example "graceful shutdown as described in RFC 9114 §5.2") instead of
+  describing its procedure. The spec states only what gRPC adds or decides:
+  which of the standard's options gRPC uses and whether it is a MUST, SHOULD,
+  or MAY; gRPC-specific values, limits, and error-code mappings; and behavior
+  the standard leaves open. A short phrase or value from the standard may be
+  repeated where it is needed to make a gRPC requirement precise.
+- **Proto references** name the file by repository path, e.g.
+  `grpc/service_config/service_config.proto`.
+- **Review comments.** Open questions about the spec are marked inline with
+  `<!-- REVIEW(<category>) [<NAME>]: <details> -->`, where `<NAME>` identifies
+  the item in the review tracker. Do not put review comments inside code blocks.
+
+## 3. Numbering and Cross-References
+
+- Each document's H1 carries its section number, e.g.
+  `# 4.6 Subchannels and Connections`. LB policy documents are unnumbered, e.g.
+  ``# `pick_first` LB Policy``.
+- Within a document, subsections omit the parent number: H2 is `## N. Title`,
+  H3 is `### N.M Title`, and H4 and deeper are unnumbered. Avoid nesting deeper
+  than H3.
+- Appendix sections use `## A.1 …`; glossary headings are `## A`, `## B`, and
+  so on.
+- Never refer to sections by number across documents. Cross-references are
+  relative links whose text is the target's title, e.g.
+  `[Connection Backoff](04-client-channel/07-subchannels.md#7-connection-backoff)`.
+- Index documents (READMEs and Load Balancing's policy list) list documents by
+  name, unnumbered.
+- **File names.** Each top-level section is a directory named for its
+  two-digit section number, e.g. `04-client-channel/`, with its overview in
+  `README.md`. A numbered document inside a section is named
+  `NN-<name>.md`, where `NN` is the two-digit last component of the section
+  number in its H1: `# 4.11 Client-Side Backend Metrics (ORCA)` is
+  `04-client-channel/11-backend-metrics.md`. A numbered group of documents is a
+  directory named the same way (section 9.4 is `09-xds/04-resources/`).
+  Unnumbered documents keep plain names: LB policy documents (named after the
+  policy, in `lb-policies/` directories), appendices (`a-…` through `g-…`), and
+  `README.md` files. When a document is renumbered, rename its file to match.
+- **Section READMEs.** A section with more than one document has a `README.md`
+  that contains only the banner, the H1 (`# N. Title`), a short description of
+  the section, and a `## Contents` list linking to every document in the
+  section (and to nested documents such as LB policies), in the same form as
+  the top-level README's table of contents. It may end with an unnumbered
+  `## Related Sections` list. Normative content goes in numbered documents: a
+  section's overview or architecture material is its `N.1` document. A section
+  with a single document (for example, 2. Core RPC Semantics) keeps its content
+  in its `README.md`.
+
+## 4. LB Policy Documents
+
+Every LB policy document (`04-client-channel/lb-policies/*.md` and
+`09-xds/lb-policies/*.md`) uses exactly this structure. Every section is always
+present, so section numbers and anchors are the same in every LB policy
+document (for example, `#4-picker-implementation` is always the picker). A
+section that does not apply contains a single sentence saying so, e.g.
+"Not applicable: the policy has no child policies."
+
+```
+<banner>
+
+# `<policy>` LB Policy
+
+<!-- Sources: ... -->
+
+> **Experimental:** ...            (only if the name or config is experimental)
+
+> **Introduced by:** ...           (if a gRFC introduced the policy)
+
+## 1. Overview
+### 1.1 Position in the xDS LB Policy Tree    (xDS policies only)
+## 2. Configuration
+### 2.1 Validation
+### 2.2 Other Inputs
+## 3. LB Policy Implementation
+### 3.1 Internal State
+### 3.2 Features
+#### <feature> …                 (one unnumbered subsection per feature)
+### 3.3 Updates from the Parent
+### 3.4 ExitIdle
+### 3.5 ResetBackoff
+### 3.6 Shutdown
+## 4. Picker Implementation
+## 5. Children and Subchannels
+### 5.1 Child Policies
+### 5.2 Calls From Children
+### 5.3 Subchannels
+## 6. Metrics
+## 7. API Requirements
+```
+
+### 4.1 Overview
+
+- One or two paragraphs saying what the policy does and whether it is a leaf,
+  parent, or petiole policy.
+- Ends with the line ``Registered name: `<name>`.``
+- **xDS policies** include `### 1.1 Position in the xDS LB Policy Tree`. It
+  contains the canonical xDS LB policy tree: a box-drawing tree (`├──`, `└──`,
+  `│`) inside an HTML `<pre>` block, in which every policy is an `<a href>` link
+  to its document. The tree is identical in every xDS policy document except
+  that the current policy is bold (`<b>`) and marked "◀ this policy". It is followed by one sentence describing the policy's parent
+  and children. When the tree changes, update it in every xDS policy document
+  and in [xDS LB Policies](09-xds/06-lb-policies.md).
+
+### 4.2 Configuration
+
+Configuration always appears as section 2, in this fixed layout:
+
+1. A line naming the proto message, e.g.
+   ``Proto: `RoundRobinConfig` in `grpc/service_config/service_config.proto`.``
+   If the config has no proto message, say so.
+2. A JSON example of the policy's complete `LoadBalancingConfig` entry (the
+   object keyed by the registered name) in a `json` code block, showing every
+   field. Where the config contains a child policy (a `LoadBalancingConfig
+   list` field), the example uses the placeholder `{ "child_policy_name": {} }`
+   rather than a real policy, unless the field always holds one specific
+   policy.
+3. A field table with exactly these columns:
+
+   | Field | Type | Required | Default | Description |
+   | --- | --- | --- | --- | --- |
+
+   - **Field** is the JSON name in backticks. Nested fields use dotted paths,
+     list elements use `[]`, and map values use `{}`, e.g.
+     `children{}.config` or `grpcKeybuilders[].names[].service`. A
+     `LoadBalancingConfig list` field is a single row.
+   - **Type** uses only: `string`, `bool`, `uint32`, `uint64`, `int32`, `int64`,
+     `number`, `Duration` (a JSON string such as `"10s"`), `object`,
+     `list of <type>`, `map of string → <type>`, `LoadBalancingConfig list`,
+     or `enum` (values listed in Description).
+   - **Required** is `Yes` or `No`. **Default** is the default value, or `—`.
+   - If the config has no fields, the table is replaced by "The config has no
+     fields; it MUST be an empty JSON object."
+4. `### 2.1 Validation` lists every condition that makes the config invalid.
+5. `### 2.2 Other Inputs` lists everything else the policy reads besides its
+   JSON config, as a table with exactly these columns (or the single word
+   "None." if there are no other inputs):
+
+   | Input | Location | Default | Used for |
+   | --- | --- | --- | --- |
+
+   - **Input** names the value (for example "Hierarchical path" or
+     `max_concurrent_requests`).
+   - **Location** says exactly where the value appears, starting with one of
+     these kinds: `Endpoint attribute`, `Address attribute`, `Top-level
+     attribute`, `Update endpoints`, `Update resolution note`, `Channel option`,
+     `Builder option` (a value a parent passes when it creates the policy),
+     `Call attribute`, `Pick argument` (another argument of a pick, such as the
+     method or request metadata), `Channel` (a property of the parent channel, such as its
+     target, default authority, or channel credentials), or `Helper`. Name who sets the
+     attribute when it is not the resolver (for example "set by `cds`").
+   - **Default** is the value used when the input is absent, or `—`.
+   - **Used for** says what the policy does with it and links to the section
+     that specifies that use. Requirements on the input (limits, how it is
+     clamped) go in this column too.
+   - A structured input (for example the `XdsConfig`) is a single row. The
+     values the policy reads from inside it are listed in a bullet list
+     directly below the table, introduced by a line such as "Values read from
+     the `XdsConfig` entry for `clusterName`:". Each bullet names the value's
+     path within the input, its default if any, what the policy uses it for,
+     and a link to the section that specifies that use.
+
+### 4.3 LB Policy Implementation
+
+Section 3 specifies how the policy handles each call it receives from its parent
+through the generic LB policy API ([Load Balancing](04-client-channel/06-load-balancing.md):
+LB Policy API). Use pseudocode wherever it makes the behavior clearer.
+
+- **3.1 Internal State:** the data the policy keeps between calls (for
+  example, its current endpoint list, children, timers, and caches).
+- **3.2 Features:** the policy's algorithms and mechanisms that the operations
+  below and the picker rely on (for example, ring construction, weight
+  calculation and scheduling, ejection timers, priority selection, connection
+  attempt ordering, caches, and control-plane RPCs), one unnumbered `####`
+  subsection each, with descriptive titles. If there are none, the section says
+  "None."
+- **3.3 Updates from the Parent:** `Update(update) → status`: how the policy
+  handles a new config, endpoint list, endpoint error, and attributes from its
+  parent (the channel or a parent LB policy); how it creates, updates, or
+  removes children and subchannels; when and how it reports its connectivity
+  state and picker; when it requests re-resolution; and the status it returns.
+- **3.4 ExitIdle, 3.5 ResetBackoff, 3.6 Shutdown:** the behavior of
+  `ExitIdle()`, `ResetBackoff()`, and `Shutdown()`.
+
+### 4.4 Picker Implementation
+
+Section 4 specifies the picker: the pick algorithm (with pseudocode), the pick
+results it returns in each case, any call-completion tracking or metric labels
+it adds, and any work it triggers in the control plane.
+
+### 4.5 Children and Subchannels
+
+Section 5 specifies how the policy relates to the policies and subchannels
+below it.
+
+- **5.1 Child Policies:** which child policies the policy creates and how they
+  are named; the config and update (endpoints and attributes) passed to each;
+  and how calls from the parent (`ExitIdle()`, `ResetBackoff()`, `Shutdown()`)
+  are forwarded to children.
+- **5.2 Calls From Children:** what the policy does when a child calls its
+  helper: `UpdateState(state, status, picker)` (including how child states are
+  aggregated), `RequestReresolution()`, and `CreateSubchannel(address,
+  attributes)` (passed through, wrapped, or given extra attributes).
+- **5.3 Subchannels:** the subchannels the policy itself creates, wraps, or
+  watches (connectivity and health watches, backend metric watches), and how it
+  reacts to their state changes.
+
+### 4.6 Metrics and API Requirements
+
+Section 6 lists the metrics the policy records, or says it records none. Section
+7 is the policy's `API Requirements` section.
+
+## 5. Feature Origin Annotations
+
+A section that specifies a distinct feature introduced by a gRFC links to that
+gRFC, so readers can find its motivation and design discussion.
+
+### 5.1 When to Annotate
+
+Annotate a feature that a reader could reasonably think of as a unit that can
+be turned on, configured, or used on its own. Examples:
+
+- An LB policy, resolver, credentials type, or certificate provider.
+- An xDS HTTP filter, an xDS resource type or major resource field, or an xDS
+  server or client feature.
+- A self-contained capability configured by its own fields or options, such as
+  connection scaling, retries and hedging, outlier detection, stateful session
+  affinity, or authority rewriting.
+- A standard service (health, reflection, ORCA, CSDS, admin) or a named set of
+  metrics.
+
+Do not annotate:
+
+- Clarifications, bug fixes, validation rules, or small behavior changes, even
+  if a gRFC made them.
+- Behavior that predates the gRFC process (for example, the core HTTP/2 wire
+  protocol), or that no gRFC introduced.
+- Every paragraph a gRFC touched.
+
+A feature often appears in more than one document: for example, connection
+scaling is specified in Subchannels and Connections, configured through a
+service config field, and set from xDS by a Cluster field. Annotate **every**
+section that a feature adds or that is dedicated to it, in every document, not
+just the main one (in this example: the subchannel section, the service config
+`connectionScaling` section, and the xDS section that maps the Cluster field).
+A part of a feature that has no section of its own (a single table row, list
+item, or sentence within a larger section) is not annotated.
+
+### 5.2 Format
+
+The annotation is a single line directly under the section's heading (after an
+`> **Experimental:**` line, if there is one), followed by a blank line:
+
+```
+> **Introduced by:** [gRFC A105: MAX_CONCURRENT_STREAMS Connection Scaling](https://github.com/grpc/proposal/blob/master/A105-max_concurrent_streams-connection-scaling.md)
+```
+
+- The link text is `gRFC <number>: <title>`, using the title from the gRFC's
+  first line. The URL points to the gRFC file on the `master` branch of
+  `github.com/grpc/proposal`.
+- If a later gRFC added a substantial, separately usable part of the feature,
+  list both, introducing gRFC first, separated by commas:
+  `> **Introduced by:** [gRFC A55: xDS-Based Stateful Session Affinity for Proxyless gRPC](https://github.com/grpc/proposal/blob/master/A55-xds-stateful-session-affinity.md), [gRFC A60: xDS-Based Stateful Session Affinity for Weighted Clusters](https://github.com/grpc/proposal/blob/master/A60-xds-stateful-session-affinity-weighted-clusters.md)`. Do not list gRFCs
+  that only clarified or adjusted the feature.
+- If the whole document specifies one feature (for example, an LB policy
+  document), put the annotation under the H1 instead of under a section heading.
+- Link only merged gRFCs. Never link pending pull requests.
+- Do not put annotations inside tables, lists, or code blocks.
+
+### 5.3 Meaning
+
+The annotation records where a feature came from. It is not part of the
+specification, and the spec text remains authoritative: where the gRFC's text
+differs from the spec (because later gRFCs or decisions changed the behavior),
+the spec wins. Do not describe the differences or the feature's history in the
+body text.
+
+## 6. File Layout
+
+```
+doc/spec/
+  README.md                               Table of contents
+  STYLE_GUIDE.md                          This guide
+  00-introduction/README.md               0. Introduction and Conventions
+  01-architecture/README.md               1. Architecture Overview
+  02-rpc-semantics/README.md              2. Core RPC Semantics
+  03-wire-protocol/                       3. Wire Protocol (README: contents)
+    01-http2.md, 02-true-binary-metadata.md, 03-http3.md, 04-protobuf.md
+  04-client-channel/                      4. Client Channel (README: contents)
+    01-architecture.md, 02-channel.md, 03-name-resolution.md,
+    04-service-config.md, 05-call-dispatch.md, 06-load-balancing.md,
+    07-subchannels.md, 09-proxy.md, 10-health-checking.md,
+    11-backend-metrics.md, 12-retries.md
+    08-transports/                        4.8 Client transports
+      01-transport-model.md, 02-http2.md, 03-http3.md, 04-in-process.md
+    lb-policies/                          General-purpose LB policies
+      pick_first.md, round_robin.md, weighted_round_robin.md, least_request.md,
+      ring_hash.md, random_subsetting.md, outlier_detection.md, priority.md,
+      weighted_target.md, rls.md
+  05-server/                              5. Server (README: contents)
+    01-server.md
+    02-transports/                        5.2 Server transports
+      01-transport-model.md, 02-http2.md, 03-http3.md, 04-in-process.md
+  06-security/                            6. Security (README: contents)
+    01-security-model.md, 02-tls.md, 03-call-credentials.md,
+    04-authorization.md
+  07-services/                            7. Standard Services (README: contents)
+    01-health.md, 02-reflection.md, 03-orca.md, 04-admin.md
+  08-observability/                       8. Observability (README: contents)
+    01-overview.md, 02-instrumentation.md, 03-metrics-framework.md,
+    04-metrics.md, 05-tracing.md, 06-channelz.md, 07-binary-logging.md
+  09-xds/                                 9. xDS (README: contents)
+    01-architecture.md, 02-bootstrap.md, 03-xds-client.md, 05-client.md,
+    06-lb-policies.md, 07-http-filters.md, 08-server.md, 09-security.md,
+    10-load-reporting.md, 11-csds.md
+    04-resources/                         9.4 xDS resource types
+      01-common-types.md, 02-listener.md, 03-route-configuration.md,
+      04-cluster.md, 05-endpoint.md
+    lb-policies/                          xDS LB policies
+      xds_cluster_manager.md, cds.md, xds_cluster_impl.md,
+      xds_override_host.md, xds_wrr_locality.md
+  appendices/                             Appendices A–G
+```
+
