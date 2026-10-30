@@ -35,9 +35,11 @@ when adding to or changing the specification.
    use language-specific names or signatures. Internal plugin APIs (resolver, LB
    policy, subchannel, picker, and so on) are also specified abstractly.
 8. **Sources.** The spec is derived from the gRFCs (which act as a changelog),
-   the documents in `grpc/doc`, and the protos in `grpc-proto`. The body text
-   does not cite gRFCs; each document lists its sources in an HTML comment under
-   its H1, e.g. `<!-- Sources: A61, A62, doc/load-balancing.md -->`.
+   the documents in `grpc/doc`, and the protos in `grpc-proto`. Each document
+   lists its sources in an HTML comment under its H1, e.g.
+   `<!-- Sources: A61, A62, doc/load-balancing.md -->`. Apart from feature
+   origin annotations ([Feature Origin Annotations](#5-feature-origin-annotations)),
+   the body text does not cite gRFCs.
 
 ## 2. Document Format
 
@@ -160,7 +162,64 @@ rows, in this order:
   policies.").
 - The picker is specified in its own policy-specific section.
 
-## 5. File Layout
+## 5. Feature Origin Annotations
+
+A section that specifies a distinct feature introduced by a gRFC links to that
+gRFC, so readers can find its motivation and design discussion.
+
+### 5.1 When to Annotate
+
+Annotate a feature that a reader could reasonably think of as a unit that can
+be turned on, configured, or used on its own. Examples:
+
+- An LB policy, resolver, credentials type, or certificate provider.
+- An xDS HTTP filter, an xDS resource type or major resource field, or an xDS
+  server or client feature.
+- A self-contained capability configured by its own fields or options, such as
+  connection scaling, retries and hedging, outlier detection, stateful session
+  affinity, or authority rewriting.
+- A standard service (health, reflection, ORCA, CSDS, admin) or a named set of
+  metrics.
+
+Do not annotate:
+
+- Clarifications, bug fixes, validation rules, or small behavior changes, even
+  if a gRFC made them.
+- Behavior that predates the gRFC process (for example, the core HTTP/2 wire
+  protocol), or that no gRFC introduced.
+- Every paragraph a gRFC touched. One annotation per feature, at the section
+  that specifies it.
+
+### 5.2 Format
+
+The annotation is a single line directly under the section's heading (after an
+`> **Experimental:**` line, if there is one), followed by a blank line:
+
+```
+> **Introduced by:** [gRFC A105: MAX_CONCURRENT_STREAMS Connection Scaling](https://github.com/grpc/proposal/blob/master/A105-max_concurrent_streams-connection-scaling.md)
+```
+
+- The link text is `gRFC <number>: <title>`, using the title from the gRFC's
+  first line. The URL points to the gRFC file on the `master` branch of
+  `github.com/grpc/proposal`.
+- If a later gRFC added a substantial, separately usable part of the feature,
+  list both, introducing gRFC first, separated by commas:
+  `> **Introduced by:** [gRFC A27: …](…), [gRFC A74: …](…)`. Do not list gRFCs
+  that only clarified or adjusted the feature.
+- If the whole document specifies one feature (for example, an LB policy
+  document), put the annotation under the H1 instead of under a section heading.
+- Link only merged gRFCs. Never link pending pull requests.
+- Do not put annotations inside tables, lists, or code blocks.
+
+### 5.3 Meaning
+
+The annotation records where a feature came from. It is not part of the
+specification, and the spec text remains authoritative: where the gRFC's text
+differs from the spec (because later gRFCs or decisions changed the behavior),
+the spec wins. Do not describe the differences or the feature's history in the
+body text.
+
+## 6. File Layout
 
 ```
 doc/spec/
