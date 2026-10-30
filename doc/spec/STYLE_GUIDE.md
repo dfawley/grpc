@@ -204,7 +204,7 @@ The annotation is a single line directly under the section's heading (after an
   `github.com/grpc/proposal`.
 - If a later gRFC added a substantial, separately usable part of the feature,
   list both, introducing gRFC first, separated by commas:
-  `> **Introduced by:** [gRFC A27: …](…), [gRFC A74: …](…)`. Do not list gRFCs
+  `> **Introduced by:** [gRFC A55: xDS-Based Stateful Session Affinity for Proxyless gRPC](https://github.com/grpc/proposal/blob/master/A55-xds-stateful-session-affinity.md), [gRFC A60: xDS-Based Stateful Session Affinity for Weighted Clusters](https://github.com/grpc/proposal/blob/master/A60-xds-stateful-session-affinity-weighted-clusters.md)`. Do not list gRFCs
   that only clarified or adjusted the feature.
 - If the whole document specifies one feature (for example, an LB policy
   document), put the annotation under the H1 instead of under a section heading.
