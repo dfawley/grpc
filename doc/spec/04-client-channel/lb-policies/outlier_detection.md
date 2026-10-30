@@ -16,11 +16,11 @@
 ## 1. Overview
 
 `outlier_detection` is a parent policy with one child (see
-[Policy Hierarchy](../05-load-balancing.md#9-policy-hierarchy)). It watches
+[Policy Hierarchy](../06-load-balancing.md#9-policy-hierarchy)). It watches
 the results of calls that the child sends to each endpoint, and
 temporarily **ejects** endpoints whose error rates are outliers. An
 ejected endpoint is reported unhealthy to the child through the generic
-health watch ([Generic Health Reporting](../05-load-balancing.md#10-generic-health-reporting)),
+health watch ([Generic Health Reporting](../06-load-balancing.md#10-generic-health-reporting)),
 so the child stops using it. The endpoint's connections are kept open,
 so that it can be used again immediately when it is un-ejected.
 
@@ -32,7 +32,7 @@ that consume the health state. That means petiole policies, through their
 used directly.
 
 The policy is not xDS-specific. For how xDS configures it, see
-[xDS LB Policies](../../09-xds/05-lb-policies.md).
+[xDS LB Policies](../../09-xds/06-lb-policies.md).
 
 Registered name: `outlier_detection_experimental`.
 
@@ -89,7 +89,7 @@ The config is invalid if any of the following holds:
   `failurePercentageEjection.threshold`, or
   `failurePercentageEjection.enforcementPercentage` is greater than 100.
 - `childPolicy` is missing or invalid (see
-  [LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration)).
+  [LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration)).
 
 If both `successRateEjection` and `failurePercentageEjection` are unset,
 outlier detection is disabled: the policy passes everything through and
@@ -102,9 +102,9 @@ None.
 ## 3. LB Policy Implementation
 
 `outlier_detection` implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+[LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
 
-### 3.1 State
+### 3.1 Internal State
 
 The policy keeps two maps:
 
@@ -120,53 +120,14 @@ The policy keeps two maps:
   address.
 
 The policy remembers the start time of the most recent ejection timer
-([Ejection Timer](#36-ejection-timer)).
+([Ejection Timer](#ejection-timer)).
 
 Call counts are updated from the data plane, and the endpoint map is used
 from the control plane, so access to them MUST be synchronized.
 
-### 3.2 Update
+### 3.2 Features
 
-Both maps are rebuilt from the endpoint list in each update. Entries for
-endpoints and addresses still present are kept. New ones are added, and
-removed ones are deleted. The subchannel map's endpoint references are
-updated if an endpoint's address set changed. The update is then passed
-to the child unchanged.
-
-If the endpoints field is an error, the maps are left unchanged and the
-error is passed to the child. If the child's policy name changes, the
-child is replaced using the procedure in
-[Gracefully Switching LB Policies](../05-load-balancing.md#12-gracefully-switching-lb-policies).
-
-On each config update, the policy starts, restarts, or cancels the
-ejection timer ([Ejection Timer](#36-ejection-timer)):
-
-- **If outlier detection is enabled:**
-  - If there is no recorded start time, record the current time, start
-    the timer for `interval`, and reset every endpoint's call counters.
-  - Otherwise, cancel the timer and restart it for
-    `interval − (now − start time)`, or 0 if that is negative.
-- **If outlier detection is disabled:**
-  - Cancel the timer and clear the start time.
-  - Un-eject all ejected endpoints, and reset every multiplier to 0.
-
-The policy reports its child's state unchanged
-([Calls From Children](#52-calls-from-children)). Returns the child's
-status.
-
-### 3.3 ExitIdle
-
-Forwarded to the child.
-
-### 3.4 ResetBackoff
-
-Forwarded to the child.
-
-### 3.5 Shutdown
-
-Cancels the ejection timer and shuts down the child.
-
-### 3.6 Ejection Timer
+#### Ejection Timer
 
 When the timer fires, it records the current time as the new start time
 and does the following:
@@ -194,7 +155,7 @@ the percentage that would result from it is compared with
 that value: with the default of 10, nothing is ejected from a set of fewer
 than 10 endpoints.
 
-#### Success-Rate Algorithm
+##### Success-Rate Algorithm
 
 ```
 candidates = [e for e in endpoints if e.volume >= sr.request_volume]
@@ -208,7 +169,7 @@ for e in candidates:
     eject(e)
 ```
 
-#### Failure-Percentage Algorithm
+##### Failure-Percentage Algorithm
 
 ```
 candidates = [e for e in endpoints if e.volume >= fp.request_volume]
@@ -222,7 +183,7 @@ for e in candidates:
 `random_int(0, 100)` is uniform over `[0, 100)`. Endpoints that are
 already ejected are not ejected again.
 
-### 3.7 Ejecting and Un-ejecting Endpoints
+#### Ejecting and Un-ejecting Endpoints
 
 **Eject an endpoint:** set its ejection timestamp to the sweep's
 timestamp, increase its multiplier by 1, and call `eject()` on the
@@ -230,6 +191,47 @@ wrappers for all of its addresses ([Subchannels](#53-subchannels)).
 
 **Un-eject an endpoint:** set its ejection timestamp to null and call
 `uneject()` on the wrappers for all of its addresses.
+
+### 3.3 Updates from the Parent
+
+Both maps are rebuilt from the endpoint list in each update. Entries for
+endpoints and addresses still present are kept. New ones are added, and
+removed ones are deleted. The subchannel map's endpoint references are
+updated if an endpoint's address set changed. The update is then passed
+to the child unchanged.
+
+If the endpoints field is an error, the maps are left unchanged and the
+error is passed to the child. If the child's policy name changes, the
+child is replaced using the procedure in
+[Gracefully Switching LB Policies](../06-load-balancing.md#12-gracefully-switching-lb-policies).
+
+On each config update, the policy starts, restarts, or cancels the
+ejection timer ([Ejection Timer](#ejection-timer)):
+
+- **If outlier detection is enabled:**
+  - If there is no recorded start time, record the current time, start
+    the timer for `interval`, and reset every endpoint's call counters.
+  - Otherwise, cancel the timer and restart it for
+    `interval − (now − start time)`, or 0 if that is negative.
+- **If outlier detection is disabled:**
+  - Cancel the timer and clear the start time.
+  - Un-eject all ejected endpoints, and reset every multiplier to 0.
+
+The policy reports its child's state unchanged
+([Calls From Children](#52-calls-from-children)). Returns the child's
+status.
+
+### 3.4 ExitIdle
+
+Forwarded to the child.
+
+### 3.5 ResetBackoff
+
+Forwarded to the child.
+
+### 3.6 Shutdown
+
+Cancels the ejection timer and shuts down the child.
 
 ## 4. Picker Implementation
 
@@ -245,10 +247,10 @@ or the failure count (any other status) in that endpoint's active bucket.
 
 The policy has a single child, whose policy and config come from
 `childPolicy`. The child receives the update described in
-[Update](#32-update), and `ExitIdle()`, `ResetBackoff()`, and
+[Update](#33-updates-from-the-parent), and `ExitIdle()`, `ResetBackoff()`, and
 `Shutdown()` are forwarded to it as specified in
-[ExitIdle](#33-exitidle), [ResetBackoff](#34-resetbackoff), and
-[Shutdown](#35-shutdown).
+[ExitIdle](#34-exitidle), [ResetBackoff](#35-resetbackoff), and
+[Shutdown](#36-shutdown).
 
 ### 5.2 Calls From Children
 
@@ -289,4 +291,4 @@ The policy records no metrics.
   `outlier_detection_experimental`, so that it can be selected through
   `loadBalancingConfig` in the service config and used as a child by other
   policies, including custom ones
-  ([Load Balancing](../05-load-balancing.md)).
+  ([Load Balancing](../06-load-balancing.md)).

@@ -16,7 +16,7 @@
 ## 1. Overview
 
 `least_request` is a petiole policy (see
-[Load Balancing: Leaf, Parent, and Petiole Policies](../05-load-balancing.md#91-leaf-parent-and-petiole-policies))
+[Load Balancing: Leaf, Parent, and Petiole Policies](../06-load-balancing.md#91-leaf-parent-and-petiole-policies))
 that sends each call to the endpoint with the fewest outstanding calls
 among a small random sample of READY endpoints ("power of N choices").
 This adapts to endpoints that are slower than others. Only the
@@ -41,7 +41,7 @@ Proto: `LeastRequestLocalityLoadBalancingPolicyConfig` in `grpc/service_config/s
 
 - The config is invalid if `choiceCount` is less than 2. An invalid config
   is rejected as described in
-  [Load Balancing: LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration).
+  [Load Balancing: LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration).
 
 ### 2.2 Other Inputs
 
@@ -50,18 +50,36 @@ None.
 ## 3. LB Policy Implementation
 
 `least_request` implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+[LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
 
-### 3.1 State
+### 3.1 Internal State
 
 The policy keeps:
 
 - One `pick_first` child per endpoint, keyed by endpoint identity, with
   the most recent state and picker reported by each child.
 - Each endpoint's `active_requests` counter, keyed by endpoint identity
-  ([Outstanding Request Counters](#36-outstanding-request-counters)).
+  ([Outstanding Request Counters](#outstanding-request-counters)).
 
-### 3.2 Update
+### 3.2 Features
+
+#### Outstanding Request Counters
+
+Each endpoint has an atomic counter `active_requests` that belongs to
+this policy instance (it is not shared with other policy instances using
+the same subchannels). The counter is keyed by endpoint identity, so it
+is retained across updates while the endpoint remains present.
+
+- The picker atomically increments the counter of the chosen endpoint
+  when it returns a Complete result.
+- The picker attaches a call tracker that atomically decrements the
+  counter when the call finishes, whatever its status. The decrement
+  also happens when the pick is not used (see
+  [Load Balancing: Call-Completion Tracking](../06-load-balancing.md#64-call-completion-tracking)).
+
+Counters can be slightly stale when read concurrently. This is accepted.
+
+### 3.3 Updates from the Parent
 
 Endpoint management and connectivity state are the same as
 [`round_robin`](round_robin.md):
@@ -81,7 +99,7 @@ left in place if doing so does not cause extra connections (see
 additional weight is ignored.
 
 Each endpoint's `active_requests` counter is retained by endpoint identity
-([Outstanding Request Counters](#36-outstanding-request-counters)). A new
+([Outstanding Request Counters](#outstanding-request-counters)). A new
 `choiceCount` takes effect when the next picker is built.
 
 An empty endpoint list, or an endpoint error with no previous list, shuts
@@ -89,34 +107,18 @@ down all children, reports TRANSIENT_FAILURE, and returns `UNAVAILABLE`.
 An endpoint error with a previous list is ignored, and the existing
 children are kept. `Update()` returns OK in all other cases.
 
-### 3.3 ExitIdle
+### 3.4 ExitIdle
 
 No-op: the policy never reports IDLE, because it calls `ExitIdle()` on any
 child that reports IDLE.
 
-### 3.4 ResetBackoff
+### 3.5 ResetBackoff
 
 Forwarded to all children.
 
-### 3.5 Shutdown
+### 3.6 Shutdown
 
 Shuts down all children.
-
-### 3.6 Outstanding Request Counters
-
-Each endpoint has an atomic counter `active_requests` that belongs to
-this policy instance (it is not shared with other policy instances using
-the same subchannels). The counter is keyed by endpoint identity, so it
-is retained across updates while the endpoint remains present.
-
-- The picker atomically increments the counter of the chosen endpoint
-  when it returns a Complete result.
-- The picker attaches a call tracker that atomically decrements the
-  counter when the call finishes, whatever its status. The decrement
-  also happens when the pick is not used (see
-  [Load Balancing: Call-Completion Tracking](../05-load-balancing.md#64-call-completion-tracking)).
-
-Counters can be slightly stale when read concurrently. This is accepted.
 
 ## 4. Picker Implementation
 
@@ -147,7 +149,7 @@ resolution note, as for `round_robin`.
 
 `least_request` creates one `pick_first` child per endpoint, with the
 child's internal health-reporting option enabled, as
-[`round_robin`](round_robin.md) does ([Update](#32-update)). Each child
+[`round_robin`](round_robin.md) does ([Update](#33-updates-from-the-parent)). Each child
 receives its endpoint with that endpoint's attributes, plus the
 resolution note and the top-level attributes.
 
@@ -159,12 +161,12 @@ resolution note and the top-level attributes.
 ### 5.2 Calls From Children
 
 `least_request` implements the
-[Helper API](../05-load-balancing.md#5-helper-api) it provides to its
+[Helper API](../06-load-balancing.md#5-helper-api) it provides to its
 children as follows:
 
 - `UpdateState(state, status, picker)`: Records the child's state and
   picker. If the state is IDLE, calls the child's `ExitIdle()`. Recomputes
-  the aggregate state ([Update](#32-update)) and reports a new picker
+  the aggregate state ([Update](#33-updates-from-the-parent)) and reports a new picker
   ([Picker Implementation](#4-picker-implementation)). While an update is
   being applied to the children, the aggregate is reported only once,
   after all children are updated.
@@ -187,4 +189,4 @@ The policy records no metrics.
   `least_request_experimental`, so that it can be selected through
   `loadBalancingConfig` in the service config and used as a child by other
   policies, including custom ones
-  ([Load Balancing](../05-load-balancing.md)).
+  ([Load Balancing](../06-load-balancing.md)).

@@ -9,7 +9,7 @@
 
 The health service lets a server report whether it can handle RPCs, both
 overall and for each service. Clients use it for client-side health checking
-([Client-side health checking](../04-client-channel/08-health-checking.md)),
+([Client-side health checking](../04-client-channel/10-health-checking.md)),
 and external systems such as load balancers and orchestrators use it for
 centralized health checking. Because it is an ordinary gRPC service, it shares
 the server's transport, security, quota, and access-control setup.
@@ -113,7 +113,7 @@ How clients react to the call ending:
   exponential backoff.
 
 The client-side state machine built on `Watch` is specified in
-[Client-side health checking](../04-client-channel/08-health-checking.md).
+[Client-side health checking](../04-client-channel/10-health-checking.md).
 
 ## 5. `List`
 
@@ -137,7 +137,7 @@ The client-side state machine built on `Watch` is specified in
 
 > **Introduced by:** [gRFC A17: Client-Side Health Checking](https://github.com/grpc/proposal/blob/master/A17-client-side-health-checking.md)
 
-Client-side health checking ([Client-Side Health Checking](../04-client-channel/08-health-checking.md))
+Client-side health checking ([Client-Side Health Checking](../04-client-channel/10-health-checking.md))
 opens one `Watch` call on each connection whose subchannel has health checking
 enabled and at least one health watcher registered, using the service name
 from the client's service config. By convention,

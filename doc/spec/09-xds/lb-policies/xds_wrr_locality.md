@@ -18,10 +18,10 @@ their locality weights and delegates endpoint picking within each locality to
 a configured child policy. It does this by generating a `weighted_target`
 config with one target per locality and running a single `weighted_target`
 child with that config. The xDS LB policy registry produces its config (see
-[xDS LB Policy Registry](../05-lb-policies.md#2-xds-lb-policy-registry)).
+[xDS LB Policy Registry](../06-lb-policies.md#2-xds-lb-policy-registry)).
 
 The `xds_wrr_locality` policy is a parent policy with a single child (see
-[Policy Hierarchy](../../04-client-channel/05-load-balancing.md#9-policy-hierarchy)).
+[Policy Hierarchy](../../04-client-channel/06-load-balancing.md#9-policy-hierarchy)).
 
 Registered name: `xds_wrr_locality_experimental`.
 
@@ -36,7 +36,7 @@ Registered name: `xds_wrr_locality_experimental`.
 │   │       └── <a href="xds_cluster_impl.md">xds_cluster_impl</a>
 │   │           └── <a href="xds_override_host.md">xds_override_host</a>
 │   │               └── <a href="../../04-client-channel/lb-policies/priority.md">priority</a>  (one child per EDS priority)
-│   │                   ├── <b><a href="xds_wrr_locality.md">xds_wrr_locality</a>  ◀ this policy</b>  (default; see <a href="../05-lb-policies.md#2-xds-lb-policy-registry">xDS LB Policy Registry</a>)
+│   │                   ├── <b><a href="xds_wrr_locality.md">xds_wrr_locality</a>  ◀ this policy</b>  (default; see <a href="../06-lb-policies.md#2-xds-lb-policy-registry">xDS LB Policy Registry</a>)
 │   │                   │   └── <a href="../../04-client-channel/lb-policies/weighted_target.md">weighted_target</a>  (one child per locality)
 │   │                   │       └── endpoint-picking policy (e.g. <a href="../../04-client-channel/lb-policies/round_robin.md">round_robin</a>)
 │   │                   │           └── <a href="../../04-client-channel/lb-policies/pick_first.md">pick_first</a>  (one per endpoint)
@@ -73,7 +73,7 @@ Proto: `XdsWrrLocalityLoadBalancingPolicyConfig` in
 ### 2.1 Validation
 
 The config is invalid, and is rejected as described in
-[LB Policy Registry and Configuration](../../04-client-channel/05-load-balancing.md#2-lb-policy-registry-and-configuration),
+[LB Policy Registry and Configuration](../../04-client-channel/06-load-balancing.md#2-lb-policy-registry-and-configuration),
 if:
 
 - `childPolicy` is missing, or is an invalid `LoadBalancingConfig` list (it
@@ -81,40 +81,21 @@ if:
 
 ### 2.2 Other Inputs
 
-The policy reads these per-endpoint attributes, set by `cds` (see
-[Endpoint List and Attributes](cds.md#37-endpoint-list-and-attributes)):
-
-- the locality and the locality name string;
-- the locality weight.
+| Input | Location | Default | Used for |
+| --- | --- | --- | --- |
+| Locality | Endpoint attribute locality, set by `cds` (see [Endpoint List and Attributes](cds.md#endpoint-list-and-attributes)) | — | Endpoints without a locality are left out of the generated targets ([Child Config Generation](#child-config-generation)). |
+| Locality name string | Endpoint attribute locality name string, set by `cds` (see [Endpoint List and Attributes](cds.md#endpoint-list-and-attributes)) | — | The `weighted_target` target name ([Child Config Generation](#child-config-generation)). |
+| Locality weight | Endpoint attribute locality weight, set by `cds` (see [Endpoint List and Attributes](cds.md#endpoint-list-and-attributes)) | — | The `weighted_target` target weight; endpoints whose locality weight is 0 are left out ([Child Config Generation](#child-config-generation)). |
 
 ## 3. LB Policy Implementation
 
-### 3.1 State
+### 3.1 Internal State
 
 The policy keeps its `weighted_target` child policy.
 
-### 3.2 Update
+### 3.2 Features
 
-On each update, the policy builds a `weighted_target` config from the endpoint
-list ([Child Config Generation](#36-child-config-generation)) and passes the
-update (endpoints, resolution note, attributes) to a single `weighted_target`
-child with that config, creating the child on the first update. If the
-generated config fails to parse, the policy reports TRANSIENT_FAILURE with an
-INTERNAL status. When it updates its child, it returns the child's status.
-
-### 3.3 ExitIdle
-
-Forwarded to the child.
-
-### 3.4 ResetBackoff
-
-Forwarded to the child.
-
-### 3.5 Shutdown
-
-Shuts down the child.
-
-### 3.6 Child Config Generation
+#### Child Config Generation
 
 The policy builds the `weighted_target` config from the endpoint list:
 
@@ -132,8 +113,29 @@ child_config = [ { "weighted_target_experimental": { "targets": {
 
 Endpoints reach their locality's child through the second element of their
 hierarchical path (see
-[Endpoint List and Attributes](cds.md#37-endpoint-list-and-attributes)). See
+[Endpoint List and Attributes](cds.md#endpoint-list-and-attributes)). See
 [weighted_target](../../04-client-channel/lb-policies/weighted_target.md).
+
+### 3.3 Updates from the Parent
+
+On each update, the policy builds a `weighted_target` config from the endpoint
+list ([Child Config Generation](#child-config-generation)) and passes the
+update (endpoints, resolution note, attributes) to a single `weighted_target`
+child with that config, creating the child on the first update. If the
+generated config fails to parse, the policy reports TRANSIENT_FAILURE with an
+INTERNAL status. When it updates its child, it returns the child's status.
+
+### 3.4 ExitIdle
+
+Forwarded to the child.
+
+### 3.5 ResetBackoff
+
+Forwarded to the child.
+
+### 3.6 Shutdown
+
+Shuts down the child.
 
 ## 4. Picker Implementation
 
@@ -144,11 +146,11 @@ Not applicable: the policy reports its child's picker unchanged.
 ### 5.1 Child Policies
 
 The policy has a single `weighted_target` child with the generated config
-([Child Config Generation](#36-child-config-generation)). It receives the
-update's endpoints, resolution note, and attributes ([Update](#32-update)).
+([Child Config Generation](#child-config-generation)). It receives the
+update's endpoints, resolution note, and attributes ([Update](#33-updates-from-the-parent)).
 `ExitIdle()`, `ResetBackoff()`, and `Shutdown()` are forwarded to it
-([ExitIdle](#33-exitidle), [ResetBackoff](#34-resetbackoff),
-[Shutdown](#35-shutdown)).
+([ExitIdle](#34-exitidle), [ResetBackoff](#35-resetbackoff),
+[Shutdown](#36-shutdown)).
 
 ### 5.2 Calls From Children
 
@@ -170,4 +172,4 @@ The policy records no metrics.
 ## 7. API Requirements
 
 - gRPC MUST register this policy in the LB policy registry under the name `xds_wrr_locality_experimental` so that the configuration generated by the xDS client data plane can select it.
-- This policy is internal to xDS support. Applications are not expected to configure it directly, and gRPC is not required to provide any public API specific to it beyond the general LB policy API requirements in [xDS LB Policies: API Requirements](../05-lb-policies.md#3-api-requirements).
+- This policy is internal to xDS support. Applications are not expected to configure it directly, and gRPC is not required to provide any public API specific to it beyond the general LB policy API requirements in [xDS LB Policies: API Requirements](../06-lb-policies.md#3-api-requirements).

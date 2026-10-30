@@ -17,10 +17,10 @@ reporting, per-call metric labels, authority rewriting, transport security
 configuration, and connection scaling. It reads the cluster's data from the
 `XdsConfig` resolver attribute. The `cds` policy places it in the subtree of
 every leaf cluster
-([Child config for a non-aggregate cluster](cds.md#38-child-config-for-a-non-aggregate-cluster)).
+([Child config for a non-aggregate cluster](cds.md#child-config-for-a-non-aggregate-cluster)).
 
 The `xds_cluster_impl` policy is a parent policy with a single child (see
-[Policy Hierarchy](../../04-client-channel/05-load-balancing.md#9-policy-hierarchy)).
+[Policy Hierarchy](../../04-client-channel/06-load-balancing.md#9-policy-hierarchy)).
 It wraps the subchannels that its descendants create and the picker that its
 child reports.
 
@@ -37,7 +37,7 @@ Registered name: `xds_cluster_impl_experimental`.
 │   │       └── <b><a href="xds_cluster_impl.md">xds_cluster_impl</a>  ◀ this policy</b>
 │   │           └── <a href="xds_override_host.md">xds_override_host</a>
 │   │               └── <a href="../../04-client-channel/lb-policies/priority.md">priority</a>  (one child per EDS priority)
-│   │                   ├── <a href="xds_wrr_locality.md">xds_wrr_locality</a>  (default; see <a href="../05-lb-policies.md#2-xds-lb-policy-registry">xDS LB Policy Registry</a>)
+│   │                   ├── <a href="xds_wrr_locality.md">xds_wrr_locality</a>  (default; see <a href="../06-lb-policies.md#2-xds-lb-policy-registry">xDS LB Policy Registry</a>)
 │   │                   │   └── <a href="../../04-client-channel/lb-policies/weighted_target.md">weighted_target</a>  (one child per locality)
 │   │                   │       └── endpoint-picking policy (e.g. <a href="../../04-client-channel/lb-policies/round_robin.md">round_robin</a>)
 │   │                   │           └── <a href="../../04-client-channel/lb-policies/pick_first.md">pick_first</a>  (one per endpoint)
@@ -79,7 +79,7 @@ deprecated and MUST be ignored.
 ### 2.1 Validation
 
 The config is invalid, and is rejected as described in
-[LB Policy Registry and Configuration](../../04-client-channel/05-load-balancing.md#2-lb-policy-registry-and-configuration),
+[LB Policy Registry and Configuration](../../04-client-channel/06-load-balancing.md#2-lb-policy-registry-and-configuration),
 if:
 
 - `clusterName` is missing.
@@ -88,86 +88,49 @@ if:
 
 ### 2.2 Other Inputs
 
-- **`XdsConfig` attribute:** the policy looks up `clusterName` in the
-  `XdsConfig` ([Update](#32-update)) and uses these fields of the cluster
-  resource and endpoint data:
-  - the EDS service name (empty for LOGICAL_DNS clusters);
-  - `max_concurrent_requests` (circuit breaking; default 1024);
-  - the LRS server (`lrs_load_reporting_server`, or none) and the backend metric
-    propagation config (`lrs_backend_metric_propagation`);
-  - the EDS drop config (`drop_overloads`);
-  - the upstream TLS config (`upstream_tls_context`);
-  - `max_connections_per_subchannel` (connection scaling).
-- **Per-endpoint attributes**, read when the child creates a subchannel: the
-  endpoint's locality ([Load Reporting](#38-load-reporting)) and `hostname`
-  ([Authority Rewriting](#39-authority-rewriting)).
-- **XdsClient**, whose LRS client provides the drop stats and locality stats
-  objects ([Load Reporting](#38-load-reporting)).
-- **Channel credentials:** whether the channel was created with
-  XdsCredentials ([Transport Security](#310-transport-security)).
-- **Route call attribute**, read by the picker for `auto_host_rewrite`
-  ([Authority Rewriting](#39-authority-rewriting)).
+| Input | Location | Default | Used for |
+| --- | --- | --- | --- |
+| Cluster entry | Top-level attribute `XdsConfig`: the `clusters` entry for `clusterName` | — | MUST be an OK `ClusterConfig` with an `EndpointConfig`; otherwise the policy reports TRANSIENT_FAILURE with an INTERNAL status ([Update](#33-updates-from-the-parent)). |
+| EDS service name | Top-level attribute `XdsConfig`: the `ClusterConfig` for `clusterName`, cluster resource field `type`: `Eds.eds_service_name` | empty (always empty for LOGICAL_DNS clusters) | Part of the circuit-breaker counter key and the load reporting keys ([Circuit Breaking](#circuit-breaking), [Load Reporting](#load-reporting)). |
+| `max_concurrent_requests` | Top-level attribute `XdsConfig`: the `ClusterConfig` for `clusterName`, cluster resource field `max_concurrent_requests` | 1024 | The circuit breaking limit ([Circuit Breaking](#circuit-breaking)). |
+| LRS server | Top-level attribute `XdsConfig`: the `ClusterConfig` for `clusterName`, cluster resource field `lrs_load_reporting_server` | none (load reporting disabled) | Where load is reported ([Load Reporting](#load-reporting)). |
+| Backend metric propagation config | Top-level attribute `XdsConfig`: the `ClusterConfig` for `clusterName`, cluster resource field `lrs_backend_metric_propagation` | — | The backend metrics copied into load reports ([Load Reporting](#load-reporting)). |
+| EDS drop config | Top-level attribute `XdsConfig`: the `ClusterConfig` for `clusterName`, `EndpointConfig` field `endpoints`, endpoint resource field `drop_categories` (from `drop_overloads`) | no drops | Dropping picks ([Drops](#drops)). |
+| Upstream TLS config | Top-level attribute `XdsConfig`: the `ClusterConfig` for `clusterName`, cluster resource field `upstream_tls_context` | — | The TLS configuration passed to subchannels when XdsCredentials are in use ([Transport Security](#transport-security)). |
+| `max_connections_per_subchannel` | Top-level attribute `XdsConfig`: the `ClusterConfig` for `clusterName`, cluster resource field `max_connections_per_subchannel` | unset (no setting applied) | The `max_connections_per_subchannel` setting of every subchannel the child creates ([Connection Scaling](#connection-scaling)). |
+| Locality | Endpoint attribute locality, set by `cds`; read when the child creates a subchannel | empty locality | The locality stats object ([Load Reporting](#load-reporting)). |
+| Locality name string | Endpoint attribute locality name string, set by `cds`; read when the child creates a subchannel | empty | The value of the `grpc.lb.locality` picker label ([Picker Labels](#41-picker-labels)). |
+| `hostname` | Endpoint attribute `hostname`, set from the endpoint resource and passed through by `cds`; read when the child creates a subchannel | empty | The `:authority` override when the route has `auto_host_rewrite` set ([Authority Rewriting](#authority-rewriting)). |
+| XdsClient | Top-level attribute XdsClient | — | Its LRS client provides the drop stats and locality stats objects ([Load Reporting](#load-reporting)); it provides the certificate provider instances configured in the bootstrap ([Transport Security](#transport-security)). |
+| Channel credentials | Channel: whether the channel was created with XdsCredentials | — | Whether to build and pass the TLS configuration ([Transport Security](#transport-security)). |
+| Route | Call attribute route, set by the xDS ConfigSelector (see [Call attributes](../05-client.md#53-call-attributes)), field `auto_host_rewrite` | — | Read by the picker for authority rewriting ([Authority Rewriting](#authority-rewriting)). |
 
 ## 3. LB Policy Implementation
 
-### 3.1 State
+### 3.1 Internal State
 
 The `xds_cluster_impl` policy keeps:
 
 - its child policy;
 - the cluster data from the last update ([Other Inputs](#22-other-inputs));
 - its reference to the process-wide circuit-breaker counter for (cluster name,
-  EDS service name) ([Circuit Breaking](#37-circuit-breaking));
+  EDS service name) ([Circuit Breaking](#circuit-breaking));
 - its drop stats object, if the cluster has an LRS server
-  ([Load Reporting](#38-load-reporting));
+  ([Load Reporting](#load-reporting));
 - the TLS configuration built from the cluster's `UpstreamTlsContext`, if
-  XdsCredentials are in use ([Transport Security](#310-transport-security));
+  XdsCredentials are in use ([Transport Security](#transport-security));
 - the subchannels its child has created, whose `max_connections_per_subchannel`
-  setting it updates ([Connection Scaling](#311-connection-scaling)).
+  setting it updates ([Connection Scaling](#connection-scaling)).
 
-### 3.2 Update
+### 3.2 Features
 
-On each update, the `xds_cluster_impl` policy:
-
-1. Looks up `clusterName` in the `XdsConfig`. The entry MUST be an OK
-   `ClusterConfig` with an `EndpointConfig`. If not, the policy reports
-   TRANSIENT_FAILURE with an INTERNAL status (this does not happen when the tree
-   is generated by `cds`).
-2. Applies the cluster data ([Other Inputs](#22-other-inputs)). It replaces its
-   circuit-breaker counter and drop stats object when their keys change
-   ([Circuit Breaking](#37-circuit-breaking), [Load Reporting](#38-load-reporting))
-   and updates the connection scaling setting of existing subchannels
-   ([Connection Scaling](#311-connection-scaling)).
-3. Passes the update (endpoints, resolution note, and attributes) to its
-   child (creating it on the first update), adding the cluster name as an
-   attribute.
-
-When it updates its child, it returns the child's status. It reports its
-connectivity state and picker when the child reports
-([Calls From Children](#52-calls-from-children)); if any drop category drops
-100% of requests, it reports READY whatever the child reports
-([Drops](#36-drops)).
-
-### 3.3 ExitIdle
-
-Forwarded to the child.
-
-### 3.4 ResetBackoff
-
-Forwarded to the child.
-
-### 3.5 Shutdown
-
-Shuts down the child and releases its drop stats object and its reference to
-the circuit-breaker counter.
-
-### 3.6 Drops
+#### Drops
 
 > **Introduced by:** [gRFC A27: xDS-Based Global Load Balancing](https://github.com/grpc/proposal/blob/master/A27-xds-global-load-balancing.md)
 
 The EDS resource's `policy.drop_overloads` gives an ordered list of drop
 categories. Each has a `category` name and a drop rate, normalized to
-requests per million (see [ClusterLoadAssignment and LbEndpointCollection](../03-resources/05-endpoint.md)).
+requests per million (see [ClusterLoadAssignment and LbEndpointCollection](../04-resources/05-endpoint.md)).
 For every pick, before anything else:
 
 ```
@@ -178,19 +141,19 @@ for each category in drop_config, in order:
 ```
 
 A drop result fails the RPC even if it is wait_for_ready, and the RPC is not
-retried (see [Load Balancing](../../04-client-channel/05-load-balancing.md)). If
+retried (see [Load Balancing](../../04-client-channel/06-load-balancing.md)). If
 any category drops 100% of requests (`drop_all`), the policy MUST report READY
 with its drop picker, whatever state the child reports (or whether it has
 reported at all).
 
-### 3.7 Circuit Breaking
+#### Circuit Breaking
 
 > **Introduced by:** [gRFC A32: gRPC xDS circuit breaking](https://github.com/grpc/proposal/blob/master/A32-xds-circuit-breaking.md)
 
 - The limit is the cluster's `max_concurrent_requests`: from the first
   `circuit_breakers.thresholds` entry with priority DEFAULT, its
   `max_requests`, and 1024 if not set (see
-  [Cluster](../03-resources/04-cluster.md)).
+  [Cluster](../04-resources/04-cluster.md)).
 - The in-flight request count is a **process-wide** counter keyed by
   (cluster name, EDS service name). All policy instances in all channels with
   the same key share it. Counters are reference-counted and created when
@@ -200,18 +163,18 @@ reported at all).
   `count >= max_concurrent_requests`, the pick returns DROP with status
   UNAVAILABLE (`circuit breaker drop`), and, if load reporting is enabled, the
   drop is recorded as an uncategorized drop (it counts in
-  `total_dropped_requests`; see [Load Reporting (LRS)](../09-load-reporting.md)).
+  `total_dropped_requests`; see [Load Reporting (LRS)](../10-load-reporting.md)).
 - Otherwise the pick is delegated to the child picker. When the child returns
   a completed pick, the picker MUST increment the counter **in the picker**.
   The counter is decremented when the call ends, whether or not the call was
   actually sent on a connection. (With connection scaling, a call may wait in
   the subchannel after the pick.)
 
-### 3.8 Load Reporting
+#### Load Reporting
 
 > **Introduced by:** [gRFC A27: xDS-Based Global Load Balancing](https://github.com/grpc/proposal/blob/master/A27-xds-global-load-balancing.md)
 
-If the cluster has an LRS server (see [Load Reporting](../09-load-reporting.md)):
+If the cluster has an LRS server (see [Load Reporting](../10-load-reporting.md)):
 
 - The policy obtains a **drop stats** object from the XdsClient's LRS client
   for (LRS server, cluster name, EDS service name). It replaces this object
@@ -233,22 +196,22 @@ If the cluster has an LRS server (see [Load Reporting](../09-load-reporting.md))
 
 If load reporting is disabled, the wrapper still stores the locality name.
 
-### 3.9 Authority Rewriting
+#### Authority Rewriting
 
 > **Introduced by:** [gRFC A81: xDS Authority Rewriting](https://github.com/grpc/proposal/blob/master/A81-xds-authority-rewriting.md)
 
 When the child creates a subchannel, the wrapper also stores the endpoint's
 `hostname` attribute. On a completed pick, if the route call attribute (see
-[Call attributes](../04-client.md)) has `auto_host_rewrite` set and the stored hostname is
+[Call attributes](../05-client.md)) has `auto_host_rewrite` set and the stored hostname is
 not empty, the picker MUST set the RPC's `:authority` override to the
 hostname. This override takes precedence over the channel's default authority
 and over per-endpoint authority attributes, but not over an authority the
 application set explicitly for the RPC (see
-[Authority](../../04-client-channel/01-channel.md)). With TLS credentials, the
+[Authority](../../04-client-channel/02-channel.md)). With TLS credentials, the
 rewritten authority is subject to the per-RPC authority check (see
-[TLS](../../06-security/01-tls.md)).
+[TLS](../../06-security/02-tls.md)).
 
-### 3.10 Transport Security
+#### Transport Security
 
 > **Introduced by:** [gRFC A29: xDS-Based Security for gRPC Clients and Servers](https://github.com/grpc/proposal/blob/master/A29-xds-tls-security.md)
 
@@ -257,10 +220,13 @@ configuration from the cluster's `UpstreamTlsContext`: root certificate
 provider and certificate name (or system root certificates), identity
 certificate provider and certificate name, SAN matchers, and SNI settings. It
 passes this to the subchannels that its child creates, so that XdsCredentials
-can use it in the handshake. If XdsCredentials are not in use, this step is
-skipped. See [xDS Security](../08-security.md).
+can use it in the handshake. The certificate provider instance names in the
+`UpstreamTlsContext` are resolved against the certificate provider instances
+configured in the bootstrap ([Bootstrap: Certificate Provider Instances](../02-bootstrap.md#44-certificate-provider-instances)),
+which the policy obtains from the XdsClient. If XdsCredentials are not in use,
+this step is skipped. See [xDS Security](../09-security.md).
 
-### 3.11 Connection Scaling
+#### Connection Scaling
 
 > **Introduced by:** [gRFC A105: MAX_CONCURRENT_STREAMS Connection Scaling](https://github.com/grpc/proposal/blob/master/A105-max_concurrent_streams-connection-scaling.md)
 
@@ -271,7 +237,43 @@ of every subchannel its child creates. When a later update changes the value,
 the policy MUST update the setting on existing subchannels without recreating
 them. If the value is unset, the policy applies no setting, so the
 subchannel's value comes from the service config, else defaults to 1. See
-[Subchannels](../../04-client-channel/06-subchannels.md).
+[Subchannels](../../04-client-channel/07-subchannels.md).
+
+### 3.3 Updates from the Parent
+
+On each update, the `xds_cluster_impl` policy:
+
+1. Looks up `clusterName` in the `XdsConfig`. The entry MUST be an OK
+   `ClusterConfig` with an `EndpointConfig`. If not, the policy reports
+   TRANSIENT_FAILURE with an INTERNAL status (this does not happen when the tree
+   is generated by `cds`).
+2. Applies the cluster data ([Other Inputs](#22-other-inputs)). It replaces its
+   circuit-breaker counter and drop stats object when their keys change
+   ([Circuit Breaking](#circuit-breaking), [Load Reporting](#load-reporting))
+   and updates the connection scaling setting of existing subchannels
+   ([Connection Scaling](#connection-scaling)).
+3. Passes the update (endpoints, resolution note, and attributes) to its
+   child (creating it on the first update), adding the cluster name as an
+   attribute.
+
+When it updates its child, it returns the child's status. It reports its
+connectivity state and picker when the child reports
+([Calls From Children](#52-calls-from-children)); if any drop category drops
+100% of requests, it reports READY whatever the child reports
+([Drops](#drops)).
+
+### 3.4 ExitIdle
+
+Forwarded to the child.
+
+### 3.5 ResetBackoff
+
+Forwarded to the child.
+
+### 3.6 Shutdown
+
+Shuts down the child and releases its drop stats object and its reference to
+the circuit-breaker counter.
 
 ## 4. Picker Implementation
 
@@ -314,10 +316,10 @@ def Pick(pick_args):
 
 The policy has a single child, created from `childPolicy` on the first update.
 The child receives the update's endpoints, resolution note, and attributes,
-plus the cluster name attribute ([Update](#32-update)). `ExitIdle()`,
+plus the cluster name attribute ([Update](#33-updates-from-the-parent)). `ExitIdle()`,
 `ResetBackoff()`, and `Shutdown()` are forwarded to it
-([ExitIdle](#33-exitidle), [ResetBackoff](#34-resetbackoff),
-[Shutdown](#35-shutdown)).
+([ExitIdle](#34-exitidle), [ResetBackoff](#35-resetbackoff),
+[Shutdown](#36-shutdown)).
 
 ### 5.2 Calls From Children
 
@@ -325,16 +327,16 @@ plus the cluster name attribute ([Update](#32-update)). `ExitIdle()`,
   with a picker that wraps the child's picker
   ([Picker Implementation](#4-picker-implementation)). If any drop category
   drops 100% of requests, the policy reports READY whatever the child reports
-  ([Drops](#36-drops)).
+  ([Drops](#drops)).
 - `RequestReresolution()`: forwarded to the policy's own helper.
 - `CreateSubchannel(address, attributes)`: creates the subchannel through the
   policy's own helper, adding the transport security configuration
-  ([Transport Security](#310-transport-security)) and the
+  ([Transport Security](#transport-security)) and the
   `max_connections_per_subchannel` setting
-  ([Connection Scaling](#311-connection-scaling)). Returns a wrapper that
+  ([Connection Scaling](#connection-scaling)). Returns a wrapper that
   stores the locality stats object or locality name
-  ([Load Reporting](#38-load-reporting)) and the endpoint's `hostname`
-  ([Authority Rewriting](#39-authority-rewriting)). The picker unwraps the
+  ([Load Reporting](#load-reporting)) and the endpoint's `hostname`
+  ([Authority Rewriting](#authority-rewriting)). The picker unwraps the
   subchannel in pick results.
 
 ### 5.3 Subchannels
@@ -344,7 +346,7 @@ health; its descendants do. It wraps the subchannels they create
 ([Calls From Children](#52-calls-from-children)), and state updates reach the
 descendants' watchers unchanged. It updates the
 `max_connections_per_subchannel` setting of these subchannels when the
-cluster's value changes ([Connection Scaling](#311-connection-scaling)).
+cluster's value changes ([Connection Scaling](#connection-scaling)).
 
 ## 6. Metrics
 
@@ -354,4 +356,4 @@ The policy records no metrics. Its picker sets the `grpc.lb.locality` label
 ## 7. API Requirements
 
 - gRPC MUST register this policy in the LB policy registry under the name `xds_cluster_impl_experimental` so that the configuration generated by the xDS client data plane can select it.
-- This policy is internal to xDS support. Applications are not expected to configure it directly, and gRPC is not required to provide any public API specific to it beyond the general LB policy API requirements in [xDS LB Policies: API Requirements](../05-lb-policies.md#3-api-requirements).
+- This policy is internal to xDS support. Applications are not expected to configure it directly, and gRPC is not required to provide any public API specific to it beyond the general LB policy API requirements in [xDS LB Policies: API Requirements](../06-lb-policies.md#3-api-requirements).

@@ -11,7 +11,7 @@
 
 `round_robin` spreads calls evenly across all endpoints by sending each
 successive call to the next READY endpoint. It is a petiole policy (see
-[Load Balancing: Leaf, Parent, and Petiole Policies](../05-load-balancing.md#91-leaf-parent-and-petiole-policies)):
+[Load Balancing: Leaf, Parent, and Petiole Policies](../06-load-balancing.md#91-leaf-parent-and-petiole-policies)):
 it creates one `pick_first` child per endpoint and tries to keep every
 endpoint connected at all times.
 
@@ -38,15 +38,19 @@ None.
 ## 3. LB Policy Implementation
 
 `round_robin` implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+[LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
 
-### 3.1 State
+### 3.1 Internal State
 
 The policy keeps one `pick_first` child per endpoint, matched by endpoint
 identity (the unordered set of addresses), and the most recent state and
 picker reported by each child.
 
-### 3.2 Update
+### 3.2 Features
+
+None.
+
+### 3.3 Updates from the Parent
 
 On each update with a non-empty endpoint list, `round_robin`:
 
@@ -64,7 +68,7 @@ If several endpoints in the list have the same address set, the policy
 MAY collapse them into one child, OR leave them in place (one child per
 entry) if doing so does not cause extra connections, for example because
 the children's subchannels for the same address are shared (see
-[Subchannel Sharing](../06-subchannels.md#4-subchannel-sharing)). When repeated
+[Subchannel Sharing](../07-subchannels.md#4-subchannel-sharing)). When repeated
 endpoints are left in place, each entry gets its own share of picks.
 
 An update with an empty endpoint list, or an endpoint error when there is
@@ -81,7 +85,7 @@ above.
 `round_robin` aggregates the children's states with the normal rules,
 using both the sticky-TRANSIENT_FAILURE and IDLE-counts-as-CONNECTING
 variations
-([Load Balancing: Connectivity State Aggregation](../05-load-balancing.md#8-connectivity-state-aggregation)).
+([Load Balancing: Connectivity State Aggregation](../06-load-balancing.md#8-connectivity-state-aggregation)).
 First match wins:
 
 | Condition | Reported state | Picker |
@@ -98,16 +102,16 @@ child reports a new state ([Calls From Children](#52-calls-from-children)).
 `round_robin` forwards its children's re-resolution requests
 ([Calls From Children](#52-calls-from-children)).
 
-### 3.3 ExitIdle
+### 3.4 ExitIdle
 
 No-op: the policy never reports IDLE, because it calls `ExitIdle()` on any
 child that reports IDLE.
 
-### 3.4 ResetBackoff
+### 3.5 ResetBackoff
 
 Forwarded to all children.
 
-### 3.5 Shutdown
+### 3.6 Shutdown
 
 Shuts down all children.
 
@@ -137,7 +141,7 @@ The CONNECTING and TRANSIENT_FAILURE pickers are specified in
 
 `round_robin` creates one `pick_first` child per endpoint, with the
 child's internal health-reporting option enabled
-([Update](#32-update)). Each child receives its endpoint with that
+([Update](#33-updates-from-the-parent)). Each child receives its endpoint with that
 endpoint's attributes, plus the resolution note and the top-level
 attributes.
 
@@ -149,7 +153,7 @@ attributes.
 ### 5.2 Calls From Children
 
 `round_robin` implements the
-[Helper API](../05-load-balancing.md#5-helper-api) it provides to its
+[Helper API](../06-load-balancing.md#5-helper-api) it provides to its
 children as follows:
 
 - `UpdateState(state, status, picker)`: Records the child's state and
@@ -179,4 +183,4 @@ The policy records no metrics.
 - gRPC MUST register this policy under the name `round_robin`, so that it
   can be selected through `loadBalancingConfig` in the service config and
   used as a child by other policies, including custom ones
-  ([Load Balancing](../05-load-balancing.md)).
+  ([Load Balancing](../06-load-balancing.md)).

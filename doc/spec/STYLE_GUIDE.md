@@ -52,6 +52,15 @@ when adding to or changing the specification.
 - **Precision.** Include config field names, JSON names, defaults, limits,
   validation rules, metadata keys, state machines, algorithms (pseudocode is
   welcome), and status-code behavior. Prefer tables for field-by-field rules.
+- **External standards.** Behavior that a published non-gRPC standard already
+  defines (for example an IETF RFC for HTTP/2, HTTP/3, QUIC, TLS, URIs, or
+  X.509) is referenced, not restated: cite the standard and section (for
+  example "graceful shutdown as described in RFC 9114 §5.2") instead of
+  describing its procedure. The spec states only what gRPC adds or decides:
+  which of the standard's options gRPC uses and whether it is a MUST, SHOULD,
+  or MAY; gRPC-specific values, limits, and error-code mappings; and behavior
+  the standard leaves open. A short phrase or value from the standard may be
+  repeated where it is needed to make a gRPC requirement precise.
 - **Proto references** name the file by repository path, e.g.
   `grpc/service_config/service_config.proto`.
 - **Review comments.** Open questions about the spec are marked inline with
@@ -70,19 +79,28 @@ when adding to or changing the specification.
   so on.
 - Never refer to sections by number across documents. Cross-references are
   relative links whose text is the target's title, e.g.
-  `[Connection Backoff](04-client-channel/06-subchannels.md#7-connection-backoff)`.
+  `[Connection Backoff](04-client-channel/07-subchannels.md#7-connection-backoff)`.
 - Index documents (READMEs and Load Balancing's policy list) list documents by
   name, unnumbered.
 - **File names.** Each top-level section is a directory named for its
   two-digit section number, e.g. `04-client-channel/`, with its overview in
   `README.md`. A numbered document inside a section is named
   `NN-<name>.md`, where `NN` is the two-digit last component of the section
-  number in its H1: `# 4.9 Client-Side Backend Metrics (ORCA)` is
-  `04-client-channel/09-backend-metrics.md`. A numbered group of documents is a
-  directory named the same way (section 9.3 is `09-xds/03-resources/`).
+  number in its H1: `# 4.11 Client-Side Backend Metrics (ORCA)` is
+  `04-client-channel/11-backend-metrics.md`. A numbered group of documents is a
+  directory named the same way (section 9.4 is `09-xds/04-resources/`).
   Unnumbered documents keep plain names: LB policy documents (named after the
   policy, in `lb-policies/` directories), appendices (`a-…` through `g-…`), and
   `README.md` files. When a document is renumbered, rename its file to match.
+- **Section READMEs.** A section with more than one document has a `README.md`
+  that contains only the banner, the H1 (`# N. Title`), a short description of
+  the section, and a `## Contents` list linking to every document in the
+  section (and to nested documents such as LB policies), in the same form as
+  the top-level README's table of contents. It may end with an unnumbered
+  `## Related Sections` list. Normative content goes in numbered documents: a
+  section's overview or architecture material is its `N.1` document. A section
+  with a single document (for example, 2. Core RPC Semantics) keeps its content
+  in its `README.md`.
 
 ## 4. LB Policy Documents
 
@@ -110,12 +128,13 @@ section that does not apply contains a single sentence saying so, e.g.
 ### 2.1 Validation
 ### 2.2 Other Inputs
 ## 3. LB Policy Implementation
-### 3.1 State
-### 3.2 Update
-### 3.3 ExitIdle
-### 3.4 ResetBackoff
-### 3.5 Shutdown
-### 3.6 … <policy algorithms>
+### 3.1 Internal State
+### 3.2 Features
+#### <feature> …                 (one unnumbered subsection per feature)
+### 3.3 Updates from the Parent
+### 3.4 ExitIdle
+### 3.5 ResetBackoff
+### 3.6 Shutdown
 ## 4. Picker Implementation
 ## 5. Children and Subchannels
 ### 5.1 Child Policies
@@ -136,7 +155,7 @@ section that does not apply contains a single sentence saying so, e.g.
   to its document. The tree is identical in every xDS policy document except
   that the current policy is bold (`<b>`) and marked "◀ this policy". It is followed by one sentence describing the policy's parent
   and children. When the tree changes, update it in every xDS policy document
-  and in [xDS LB Policies](09-xds/05-lb-policies.md).
+  and in [xDS LB Policies](09-xds/06-lb-policies.md).
 
 ### 4.2 Configuration
 
@@ -169,30 +188,50 @@ Configuration always appears as section 2, in this fixed layout:
      fields; it MUST be an empty JSON object."
 4. `### 2.1 Validation` lists every condition that makes the config invalid.
 5. `### 2.2 Other Inputs` lists everything else the policy reads besides its
-   JSON config: channel options, resolver and endpoint attributes, and (for
-   xDS policies) the cluster data it reads from the `XdsConfig`. If there are
-   none, it says "None."
+   JSON config, as a table with exactly these columns (or the single word
+   "None." if there are no other inputs):
+
+   | Input | Location | Default | Used for |
+   | --- | --- | --- | --- |
+
+   - **Input** names the value (for example "Hierarchical path" or
+     `max_concurrent_requests`).
+   - **Location** says exactly where the value appears, starting with one of
+     these kinds: `Endpoint attribute`, `Address attribute`, `Top-level
+     attribute`, `Update endpoints`, `Update resolution note`, `Channel option`,
+     `Call attribute`, `Pick argument` (another argument of a pick, such as the
+     method or request metadata), `Channel` (a property of the parent channel, such as its
+     target, default authority, or channel credentials), or `Helper`. Values
+     read from a structured attribute name the path to the value, for example
+     "Top-level attribute `XdsConfig`: the `ClusterConfig` for `clusterName`,
+     cluster resource field `max_concurrent_requests`". Name who sets the
+     attribute when it is not the resolver (for example "set by `cds`").
+   - **Default** is the value used when the input is absent, or `—`.
+   - **Used for** says what the policy does with it and links to the section
+     that specifies that use. Requirements on the input (limits, how it is
+     clamped) go in this column too.
 
 ### 4.3 LB Policy Implementation
 
 Section 3 specifies how the policy handles each call it receives from its parent
-through the generic LB policy API ([Load Balancing](04-client-channel/05-load-balancing.md):
+through the generic LB policy API ([Load Balancing](04-client-channel/06-load-balancing.md):
 LB Policy API). Use pseudocode wherever it makes the behavior clearer.
 
-- **3.1 State:** the data the policy keeps between calls (for example, its
-  current endpoint list, children, timers, and caches).
-- **3.2 Update:** `Update(update) → status`: how the policy handles a new
-  config, endpoint list, endpoint error, and attributes; how it creates,
-  updates, or removes children and subchannels; when and how it reports its
-  connectivity state and picker; when it requests re-resolution; and the status
-  it returns.
-- **3.3 ExitIdle, 3.4 ResetBackoff, 3.5 Shutdown:** the behavior of
+- **3.1 Internal State:** the data the policy keeps between calls (for
+  example, its current endpoint list, children, timers, and caches).
+- **3.2 Features:** the policy's algorithms and mechanisms that the operations
+  below and the picker rely on (for example, ring construction, weight
+  calculation and scheduling, ejection timers, priority selection, connection
+  attempt ordering, caches, and control-plane RPCs), one unnumbered `####`
+  subsection each, with descriptive titles. If there are none, the section says
+  "None."
+- **3.3 Updates from the Parent:** `Update(update) → status`: how the policy
+  handles a new config, endpoint list, endpoint error, and attributes from its
+  parent (the channel or a parent LB policy); how it creates, updates, or
+  removes children and subchannels; when and how it reports its connectivity
+  state and picker; when it requests re-resolution; and the status it returns.
+- **3.4 ExitIdle, 3.5 ResetBackoff, 3.6 Shutdown:** the behavior of
   `ExitIdle()`, `ResetBackoff()`, and `Shutdown()`.
-- **3.6 and later:** the policy's algorithms and mechanisms that the
-  operations above and the picker rely on (for example, ring construction,
-  weight calculation and scheduling, ejection timers, priority selection,
-  connection attempt ordering, caches, and control-plane RPCs), one subsection
-  each, with descriptive titles.
 
 ### 4.4 Picker Implementation
 
@@ -296,30 +335,36 @@ doc/spec/
   00-introduction/README.md               0. Introduction and Conventions
   01-architecture/README.md               1. Architecture Overview
   02-rpc-semantics/README.md              2. Core RPC Semantics
-  03-wire-protocol/                       3. Wire Protocol
-    01-http2.md, 02-http2-transport.md, 03-true-binary-metadata.md,
-    04-http3.md, 05-protobuf.md
-  04-client-channel/                      4. Client Channel
-    01-channel.md, 02-name-resolution.md, 03-service-config.md,
-    04-call-dispatch.md, 05-load-balancing.md, 06-subchannels.md,
-    07-proxy.md, 08-health-checking.md, 09-backend-metrics.md, 10-retries.md
+  03-wire-protocol/                       3. Wire Protocol (README: contents)
+    01-http2.md, 02-true-binary-metadata.md, 03-http3.md, 04-protobuf.md
+  04-client-channel/                      4. Client Channel (README: contents)
+    01-architecture.md, 02-channel.md, 03-name-resolution.md,
+    04-service-config.md, 05-call-dispatch.md, 06-load-balancing.md,
+    07-subchannels.md, 09-proxy.md, 10-health-checking.md,
+    11-backend-metrics.md, 12-retries.md
+    08-transports/                        4.8 Client transports
+      01-transport-model.md, 02-http2.md, 03-http3.md, 04-in-process.md
     lb-policies/                          General-purpose LB policies
       pick_first.md, round_robin.md, weighted_round_robin.md, least_request.md,
       ring_hash.md, random_subsetting.md, outlier_detection.md, priority.md,
       weighted_target.md, rls.md
-  05-server/README.md                     5. Server
-  06-security/                            6. Security
-    01-tls.md, 02-call-credentials.md, 03-authorization.md
-  07-services/                            7. Standard Services
+  05-server/                              5. Server (README: contents)
+    01-server.md
+    02-transports/                        5.2 Server transports
+      01-transport-model.md, 02-http2.md, 03-http3.md, 04-in-process.md
+  06-security/                            6. Security (README: contents)
+    01-security-model.md, 02-tls.md, 03-call-credentials.md,
+    04-authorization.md
+  07-services/                            7. Standard Services (README: contents)
     01-health.md, 02-reflection.md, 03-orca.md, 04-admin.md
-  08-observability/                       8. Observability
-    01-instrumentation.md, 02-metrics-framework.md, 03-metrics.md,
-    04-tracing.md, 05-channelz.md, 06-binary-logging.md
-  09-xds/                                 9. xDS
-    01-bootstrap.md, 02-xds-client.md, 04-client.md, 05-lb-policies.md,
-    06-http-filters.md, 07-server.md, 08-security.md, 09-load-reporting.md,
-    10-csds.md
-    03-resources/                         9.3 xDS resource types
+  08-observability/                       8. Observability (README: contents)
+    01-overview.md, 02-instrumentation.md, 03-metrics-framework.md,
+    04-metrics.md, 05-tracing.md, 06-channelz.md, 07-binary-logging.md
+  09-xds/                                 9. xDS (README: contents)
+    01-architecture.md, 02-bootstrap.md, 03-xds-client.md, 05-client.md,
+    06-lb-policies.md, 07-http-filters.md, 08-server.md, 09-security.md,
+    10-load-reporting.md, 11-csds.md
+    04-resources/                         9.4 xDS resource types
       01-common-types.md, 02-listener.md, 03-route-configuration.md,
       04-cluster.md, 05-endpoint.md
     lb-policies/                          xDS LB policies

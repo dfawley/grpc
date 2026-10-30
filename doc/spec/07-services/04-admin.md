@@ -21,8 +21,8 @@ changes.
 
 | Service | Proto | Included when | Specified in |
 | --- | --- | --- | --- |
-| Channelz (`grpc.channelz.v1.Channelz`) | `grpc/channelz/v1/channelz.proto` | Always | [Channelz](../08-observability/05-channelz.md) |
-| Client Status Discovery Service (`envoy.service.status.v3.ClientStatusDiscoveryService`) | `envoy/service/status/v3/csds.proto` | When gRPC's xDS support is part of the application | [CSDS](../09-xds/10-csds.md) |
+| Channelz (`grpc.channelz.v1.Channelz`) | `grpc/channelz/v1/channelz.proto` | Always | [Channelz](../08-observability/06-channelz.md) |
+| Client Status Discovery Service (`envoy.service.status.v3.ClientStatusDiscoveryService`) | `envoy/service/status/v3/csds.proto` | When gRPC's xDS support is part of the application | [CSDS](../09-xds/11-csds.md) |
 
 The set MAY grow. Services added to it later are added automatically to
 servers that use the admin interface.
@@ -48,7 +48,7 @@ support into an application.
   statistics, and xDS configuration. Applications SHOULD protect the server or
   listening address that hosts them with appropriate credentials
   ([Security](../06-security/README.md)) and/or authorization
-  ([Authorization](../06-security/03-authorization.md)), or limit it to a local or trusted
+  ([Authorization](../06-security/04-authorization.md)), or limit it to a local or trusted
   network.
 
 ## 3. API Requirements
@@ -59,6 +59,6 @@ support into an application.
    before start. The function MAY instead return the set of admin service
    implementations, which the application then registers.
 2. The function MUST work on any server the application can build, including
-   xDS-enabled servers ([xDS-Enabled Servers](../09-xds/07-server.md)).
+   xDS-enabled servers ([xDS-Enabled Servers](../09-xds/08-server.md)).
 3. Each admin service MUST also be available individually, so that an
    application can register a chosen subset.

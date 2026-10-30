@@ -22,7 +22,7 @@ endpoints that are used for sessions, including DRAINING endpoints and
 endpoints that its child does not use.
 
 The `xds_override_host` policy is a parent policy with a single child (see
-[Policy Hierarchy](../../04-client-channel/05-load-balancing.md#9-policy-hierarchy)).
+[Policy Hierarchy](../../04-client-channel/06-load-balancing.md#9-policy-hierarchy)).
 It wraps the subchannels that its descendants create, and it can also create
 subchannels itself. The policy is always present in the tree. If no stateful
 session xDS HTTP filter is configured, no RPC carries the override attribute
@@ -41,7 +41,7 @@ Registered name: `xds_override_host_experimental`.
 │   │       └── <a href="xds_cluster_impl.md">xds_cluster_impl</a>
 │   │           └── <b><a href="xds_override_host.md">xds_override_host</a>  ◀ this policy</b>
 │   │               └── <a href="../../04-client-channel/lb-policies/priority.md">priority</a>  (one child per EDS priority)
-│   │                   ├── <a href="xds_wrr_locality.md">xds_wrr_locality</a>  (default; see <a href="../05-lb-policies.md#2-xds-lb-policy-registry">xDS LB Policy Registry</a>)
+│   │                   ├── <a href="xds_wrr_locality.md">xds_wrr_locality</a>  (default; see <a href="../06-lb-policies.md#2-xds-lb-policy-registry">xDS LB Policy Registry</a>)
 │   │                   │   └── <a href="../../04-client-channel/lb-policies/weighted_target.md">weighted_target</a>  (one child per locality)
 │   │                   │       └── endpoint-picking policy (e.g. <a href="../../04-client-channel/lb-policies/round_robin.md">round_robin</a>)
 │   │                   │           └── <a href="../../04-client-channel/lb-policies/pick_first.md">pick_first</a>  (one per endpoint)
@@ -81,7 +81,7 @@ The deprecated `overrideHostStatus` field MUST be ignored.
 ### 2.1 Validation
 
 The config is invalid, and is rejected as described in
-[LB Policy Registry and Configuration](../../04-client-channel/05-load-balancing.md#2-lb-policy-registry-and-configuration),
+[LB Policy Registry and Configuration](../../04-client-channel/06-load-balancing.md#2-lb-policy-registry-and-configuration),
 if:
 
 - `clusterName` is missing.
@@ -90,73 +90,29 @@ if:
 
 ### 2.2 Other Inputs
 
-- **`XdsConfig` attribute:** the policy takes two values from the parsed
-  cluster resource in the `XdsConfig`:
-  - `override_host_statuses`: the set of EDS health statuses for which the
-    session override is honored. It comes from
-    `common_lb_config.override_host_status`. Only UNKNOWN, HEALTHY, and
-    DRAINING are meaningful. The default is {UNKNOWN, HEALTHY}.
-  - `connection_idle_timeout` (called `idle_timeout` below): from the
-    cluster's `upstream_config` HTTP protocol options
-    `common_http_protocol_options.idle_timeout`, default 1 hour.
-
-  Validation of both is in [Cluster](../03-resources/04-cluster.md).
-- **Per-endpoint attributes:** each endpoint's EDS health status, and its
-  attributes as a whole, which are stored to create subchannels
-  ([Address Map](#36-address-map)).
-- **Override-host call attribute**, read by the picker
-  ([Picker Implementation](#4-picker-implementation)).
+| Input | Location | Default | Used for |
+| --- | --- | --- | --- |
+| `override_host_statuses` | Top-level attribute `XdsConfig`: the `ClusterConfig` for `clusterName`, cluster resource field `override_host_statuses` (from `common_lb_config.override_host_status`) | {UNKNOWN, HEALTHY} | The set of EDS health statuses for which the session override is honored. Only UNKNOWN, HEALTHY, and DRAINING are meaningful. Validation is in [Cluster](../04-resources/04-cluster.md) ([Update](#33-updates-from-the-parent), [Picker Implementation](#4-picker-implementation)). |
+| `connection_idle_timeout` (called `idle_timeout` in this document) | Top-level attribute `XdsConfig`: the `ClusterConfig` for `clusterName`, cluster resource field `connection_idle_timeout` (from the cluster's `upstream_config` HTTP protocol options `common_http_protocol_options.idle_timeout`) | 1 hour | How long an owned subchannel is kept without session use. Validation is in [Cluster](../04-resources/04-cluster.md) ([Idle Sweep](#idle-sweep), [Subchannels](#53-subchannels)). |
+| Health status | Endpoint attribute health status (the endpoint's EDS `health_status`), passed through by `cds` | — | Stored in the address map; decides which endpoints are left out of the map and of the child's endpoint list ([Address Map](#address-map), [Update](#33-updates-from-the-parent)). |
+| Endpoint attributes | Endpoint attribute: all attributes of each endpoint, as set by `cds` | — | Stored in the address map to create subchannels ([Address Map](#address-map)). |
+| Override host | Call attribute override host, set by the stateful session xDS HTTP filter (see [xDS HTTP Filters](../07-http-filters.md)) | — (normal load balancing) | Read by the picker: the cookie's address list chooses the endpoint, and the policy writes back the actual address list of the endpoint used ([Picker Implementation](#4-picker-implementation)). |
 
 ## 3. LB Policy Implementation
 
-### 3.1 State
+### 3.1 Internal State
 
 The `xds_override_host` policy keeps:
 
 - its child policy;
 - the cluster data from the last update ([Other Inputs](#22-other-inputs));
-- the address map ([Address Map](#36-address-map)), including the
+- the address map ([Address Map](#address-map)), including the
   subchannels it owns;
-- the idle sweep timer ([Idle Sweep](#37-idle-sweep)).
+- the idle sweep timer ([Idle Sweep](#idle-sweep)).
 
-### 3.2 Update
+### 3.2 Features
 
-On each update from `cds`, the policy reads the cluster data from the
-`XdsConfig` ([Other Inputs](#22-other-inputs)) and then:
-
-1. For each endpoint in the update, and each of its addresses, the address
-   map entry ([Address Map](#36-address-map)) is created or updated with the health status, address list, and attributes.
-   Exception: an endpoint whose health status is DRAINING and is not in
-   `override_host_statuses` is left out of the map.
-2. Entries for addresses no longer present are removed. Any subchannel the
-   policy owns for them is released.
-3. The endpoint list passed to the child **always** leaves out endpoints in
-   state DRAINING, whatever `override_host_statuses` contains. DRAINING endpoints
-   receive only session traffic.
-4. The idle sweep timer is rescheduled ([Idle Sweep](#37-idle-sweep)).
-
-It passes the update to its child with that endpoint list, and with the
-resolution note and attributes unchanged. When it
-updates its child, it returns the child's status.
-
-The policy reports its child's connectivity state unchanged. It reports a new
-picker when the child does, and when it creates an owned subchannel.
-
-### 3.3 ExitIdle
-
-Forwarded to the child.
-
-### 3.4 ResetBackoff
-
-Resets the backoff of every subchannel the policy owns and forwards the
-request to the child.
-
-### 3.5 Shutdown
-
-Releases every subchannel the policy owns, cancels the idle sweep timer, and
-shuts down the child.
-
-### 3.6 Address Map
+#### Address Map
 
 The policy keeps an **address map** from address (`IP:port` string) to an
 entry with:
@@ -171,11 +127,11 @@ entry with:
 - the endpoint's per-endpoint attributes (used to create a subchannel);
 - `last_used_time`: the last time the entry was used for a session.
 
-The map is updated on each update ([Update](#32-update)), when subchannels
+The map is updated on each update ([Update](#33-updates-from-the-parent)), when subchannels
 change owner ([Subchannels](#53-subchannels)), and by the picker
 ([Picker Implementation](#4-picker-implementation)).
 
-### 3.7 Idle Sweep
+#### Idle Sweep
 
 The policy runs a timer that releases owned subchannels that have not been
 used for a session within `idle_timeout`:
@@ -195,11 +151,48 @@ The timer first runs after `idle_timeout` (or earlier, from the entries'
 `last_used_time`). Runs are at least 5 seconds apart. Child-owned subchannels
 are never released by the sweep.
 
+### 3.3 Updates from the Parent
+
+On each update from `cds`, the policy reads the cluster data from the
+`XdsConfig` ([Other Inputs](#22-other-inputs)) and then:
+
+1. For each endpoint in the update, and each of its addresses, the address
+   map entry ([Address Map](#address-map)) is created or updated with the health status, address list, and attributes.
+   Exception: an endpoint whose health status is DRAINING and is not in
+   `override_host_statuses` is left out of the map.
+2. Entries for addresses no longer present are removed. Any subchannel the
+   policy owns for them is released.
+3. The endpoint list passed to the child **always** leaves out endpoints in
+   state DRAINING, whatever `override_host_statuses` contains. DRAINING endpoints
+   receive only session traffic.
+4. The idle sweep timer is rescheduled ([Idle Sweep](#idle-sweep)).
+
+It passes the update to its child with that endpoint list, and with the
+resolution note and attributes unchanged. When it
+updates its child, it returns the child's status.
+
+The policy reports its child's connectivity state unchanged. It reports a new
+picker when the child does, and when it creates an owned subchannel.
+
+### 3.4 ExitIdle
+
+Forwarded to the child.
+
+### 3.5 ResetBackoff
+
+Resets the backoff of every subchannel the policy owns and forwards the
+request to the child.
+
+### 3.6 Shutdown
+
+Releases every subchannel the policy owns, cancels the idle sweep timer, and
+shuts down the child.
+
 ## 4. Picker Implementation
 
 `last_used_time` is updated only for RPCs that carry the override-host call
 attribute, which the stateful session xDS HTTP filter sets (see
-[xDS HTTP Filters](../06-http-filters.md)). The attribute contains the cookie's
+[xDS HTTP Filters](../07-http-filters.md)). The attribute contains the cookie's
 address list. The policy uses it to report back the actual address list of the
 endpoint that was used.
 
@@ -253,10 +246,10 @@ MUST be synchronized (for example, with a reader/writer lock).
 
 The policy has a single child, created from `childPolicy`. The child receives
 the update with DRAINING endpoints removed from the endpoint list, and with
-the resolution note and attributes unchanged ([Update](#32-update)).
+the resolution note and attributes unchanged ([Update](#33-updates-from-the-parent)).
 `ExitIdle()`, `ResetBackoff()`, and `Shutdown()` are forwarded to it
-([ExitIdle](#33-exitidle), [ResetBackoff](#34-resetbackoff),
-[Shutdown](#35-shutdown)).
+([ExitIdle](#34-exitidle), [ResetBackoff](#35-resetbackoff),
+[Shutdown](#36-shutdown)).
 
 ### 5.2 Calls From Children
 
@@ -295,4 +288,4 @@ The policy records no metrics.
 ## 7. API Requirements
 
 - gRPC MUST register this policy in the LB policy registry under the name `xds_override_host_experimental` so that the configuration generated by the xDS client data plane can select it.
-- This policy is internal to xDS support. Applications are not expected to configure it directly, and gRPC is not required to provide any public API specific to it beyond the general LB policy API requirements in [xDS LB Policies: API Requirements](../05-lb-policies.md#3-api-requirements).
+- This policy is internal to xDS support. Applications are not expected to configure it directly, and gRPC is not required to provide any public API specific to it beyond the general LB policy API requirements in [xDS LB Policies: API Requirements](../06-lb-policies.md#3-api-requirements).

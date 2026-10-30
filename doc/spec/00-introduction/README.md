@@ -167,14 +167,14 @@ The most important terms are:
 
 - **Channel**: a client-side virtual connection to a target, capable of
   sending RPCs (see [Core RPC Semantics: Channels and Servers](../02-rpc-semantics/README.md#1-channels-and-servers) and
-  [Channel](../04-client-channel/01-channel.md)).
+  [Channel](../04-client-channel/02-channel.md)).
 - **Server**: a component that accepts connections and serves RPCs (see
   [Server](../05-server/README.md)).
 - **Call** or **RPC**: one invocation of a method (see
   [Core RPC Semantics: Calls](../02-rpc-semantics/README.md#3-calls)).
 - **Call attempt**: one transmission of a call to a server. A call has one or
   more attempts when retries or hedging are in use (see
-  [Retries and Hedging](../04-client-channel/10-retries.md)).
+  [Retries and Hedging](../04-client-channel/12-retries.md)).
 - **Metadata**: key/value pairs sent with request headers, response headers, or
   trailers (see [Core RPC Semantics: Metadata](../02-rpc-semantics/README.md#7-metadata)).
 - **Control plane** and **data plane**: inside a client, the control plane is
@@ -192,13 +192,13 @@ The specification consists of the following top-level sections:
 | [Introduction and Conventions](README.md) | This section. |
 | [Architecture Overview](../01-architecture/README.md) | The client and server architecture, the main components, and the points where behavior can be plugged in. Mostly informative. |
 | [Core RPC Semantics](../02-rpc-semantics/README.md) | The transport-independent RPC model: methods, calls, metadata, deadlines, cancellation, status codes, message limits, compression, wait-for-ready, interceptors, and codecs. |
-| [Wire Protocol](../03-wire-protocol/README.md) | [gRPC over HTTP/2](../03-wire-protocol/01-http2.md), [HTTP/2 transport behavior](../03-wire-protocol/02-http2-transport.md), [true binary metadata](../03-wire-protocol/03-true-binary-metadata.md), [gRPC over HTTP/3](../03-wire-protocol/04-http3.md), and the [Protocol Buffers mapping](../03-wire-protocol/05-protobuf.md). |
-| [Client Channel](../04-client-channel/README.md) | [Channel](../04-client-channel/01-channel.md), [name resolution](../04-client-channel/02-name-resolution.md), [service config](../04-client-channel/03-service-config.md), [per-call configuration](../04-client-channel/04-call-dispatch.md), [load balancing](../04-client-channel/05-load-balancing.md) and the standard LB policies, [subchannels](../04-client-channel/06-subchannels.md), [HTTP CONNECT proxies](../04-client-channel/07-proxy.md), [client-side health checking](../04-client-channel/08-health-checking.md), [client-side backend metrics](../04-client-channel/09-backend-metrics.md), and [retries and hedging](../04-client-channel/10-retries.md). |
-| [Server](../05-server/README.md) | Server lifecycle, listeners, connection management, method dispatch, and server API requirements. |
-| [Security](../06-security/README.md) | The security model, [TLS](../06-security/01-tls.md), [call credentials](../06-security/02-call-credentials.md), and [authorization](../06-security/03-authorization.md). |
+| [Wire Protocol](../03-wire-protocol/README.md) | [gRPC over HTTP/2](../03-wire-protocol/01-http2.md), [true binary metadata](../03-wire-protocol/02-true-binary-metadata.md), [gRPC over HTTP/3](../03-wire-protocol/03-http3.md), and the [Protocol Buffers mapping](../03-wire-protocol/04-protobuf.md). |
+| [Client Channel](../04-client-channel/README.md) | [Channel](../04-client-channel/02-channel.md), [name resolution](../04-client-channel/03-name-resolution.md), [service config](../04-client-channel/04-service-config.md), [per-call configuration](../04-client-channel/05-call-dispatch.md), [load balancing](../04-client-channel/06-load-balancing.md) and the standard LB policies, [subchannels](../04-client-channel/07-subchannels.md), [client transports](../04-client-channel/08-transports/01-transport-model.md) (HTTP/2, HTTP/3, in-process), [HTTP CONNECT proxies](../04-client-channel/09-proxy.md), [client-side health checking](../04-client-channel/10-health-checking.md), [client-side backend metrics](../04-client-channel/11-backend-metrics.md), and [retries and hedging](../04-client-channel/12-retries.md). |
+| [Server](../05-server/README.md) | [Server behavior](../05-server/01-server.md) (lifecycle, listeners, method dispatch, connection management) and [server transports](../05-server/02-transports/01-transport-model.md) (HTTP/2, HTTP/3, in-process). |
+| [Security](../06-security/README.md) | The security model, [TLS](../06-security/02-tls.md), [call credentials](../06-security/03-call-credentials.md), and [authorization](../06-security/04-authorization.md). |
 | [Standard Services](../07-services/README.md) | [Health](../07-services/01-health.md), [reflection](../07-services/02-reflection.md), [ORCA backend metrics](../07-services/03-orca.md), and the [admin interface](../07-services/04-admin.md). |
-| [Observability](../08-observability/README.md) | [Instrumentation architecture](../08-observability/01-instrumentation.md), [metrics framework](../08-observability/02-metrics-framework.md), [metric catalog](../08-observability/03-metrics.md), [tracing](../08-observability/04-tracing.md), [channelz](../08-observability/05-channelz.md), and [binary logging](../08-observability/06-binary-logging.md). |
-| [xDS](../09-xds/README.md) | [Bootstrap](../09-xds/01-bootstrap.md), [XdsClient](../09-xds/02-xds-client.md), resources ([common types](../09-xds/03-resources/01-common-types.md), [Listener](../09-xds/03-resources/02-listener.md), [RouteConfiguration](../09-xds/03-resources/03-route-configuration.md), [Cluster](../09-xds/03-resources/04-cluster.md), [endpoints](../09-xds/03-resources/05-endpoint.md)), [client data plane](../09-xds/04-client.md), [xDS LB policies](../09-xds/05-lb-policies.md), [xDS HTTP filters](../09-xds/06-http-filters.md), [xDS-enabled servers](../09-xds/07-server.md), [xDS security](../09-xds/08-security.md), [load reporting](../09-xds/09-load-reporting.md), and [CSDS](../09-xds/10-csds.md). |
+| [Observability](../08-observability/README.md) | [Instrumentation architecture](../08-observability/02-instrumentation.md), [metrics framework](../08-observability/03-metrics-framework.md), [metric catalog](../08-observability/04-metrics.md), [tracing](../08-observability/05-tracing.md), [channelz](../08-observability/06-channelz.md), and [binary logging](../08-observability/07-binary-logging.md). |
+| [xDS](../09-xds/README.md) | [Bootstrap](../09-xds/02-bootstrap.md), [XdsClient](../09-xds/03-xds-client.md), resources ([common types](../09-xds/04-resources/01-common-types.md), [Listener](../09-xds/04-resources/02-listener.md), [RouteConfiguration](../09-xds/04-resources/03-route-configuration.md), [Cluster](../09-xds/04-resources/04-cluster.md), [endpoints](../09-xds/04-resources/05-endpoint.md)), [client data plane](../09-xds/05-client.md), [xDS LB policies](../09-xds/06-lb-policies.md), [xDS HTTP filters](../09-xds/07-http-filters.md), [xDS-enabled servers](../09-xds/08-server.md), [xDS security](../09-xds/09-security.md), [load reporting](../09-xds/10-load-reporting.md), and [CSDS](../09-xds/11-csds.md). |
 
 Appendices:
 

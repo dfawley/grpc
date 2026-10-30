@@ -15,7 +15,7 @@
 ## 1. Overview
 
 `ring_hash` is a petiole policy (see
-[Policy Hierarchy](../05-load-balancing.md#9-policy-hierarchy)) that does
+[Policy Hierarchy](../06-load-balancing.md#9-policy-hierarchy)) that does
 consistent hashing. It places each endpoint on a hash ring one or more
 times, and sends each call to the first usable endpoint at or after the
 call's request hash. Calls with the same request hash go to the same
@@ -27,9 +27,9 @@ The request hash comes from one of two sources:
 
 - A configured request header ([Configuration](#2-configuration)).
 - A hash computed per call by the
-  [ConfigSelector](../04-call-dispatch.md) and passed as a call attribute.
+  [ConfigSelector](../05-call-dispatch.md) and passed as a call attribute.
   The xDS ConfigSelector does this from the route's hash policies, see
-  [RouteConfiguration: Hash Policy](../../09-xds/03-resources/03-route-configuration.md#7-hash-policy).
+  [RouteConfiguration: Hash Policy](../../09-xds/04-resources/03-route-configuration.md#7-hash-policy).
 
 Registered name: `ring_hash_experimental`.
 
@@ -50,8 +50,8 @@ Proto: `RingHashLoadBalancingConfig` in
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `minRingSize` | uint64 | No | 1024 | Minimum ring size ([Ring Construction](#36-ring-construction)). MUST be in `[1, 8388608]`. |
-| `maxRingSize` | uint64 | No | 4096 | Maximum ring size ([Ring Construction](#36-ring-construction)). MUST be in `[1, 8388608]`. |
+| `minRingSize` | uint64 | No | 1024 | Minimum ring size ([Ring Construction](#ring-construction)). MUST be in `[1, 8388608]`. |
+| `maxRingSize` | uint64 | No | 4096 | Maximum ring size ([Ring Construction](#ring-construction)). MUST be in `[1, 8388608]`. |
 | `requestHashHeader` | string | No | `""` | Request header whose value is hashed to compute the request hash ([Picker Implementation](#4-picker-implementation)). If empty, the request hash is taken from the call attribute set by the ConfigSelector. If non-empty, MUST be a valid header name, and MUST NOT end in `-bin`. |
 
 ### 2.1 Validation
@@ -61,102 +61,42 @@ Proto: `RingHashLoadBalancingConfig` in
 - `minRingSize` MUST NOT be greater than `maxRingSize`.
 
 Any violation makes the config invalid (see
-[LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration)).
+[LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration)).
 An explicit value of 0 is invalid; it does not mean "use the default".
 These checks MUST be applied to the values as configured, before the
-local [Ring Size Cap](#ring-size-cap), so that every client accepts or
+local [Ring Size Cap](#22-other-inputs), so that every client accepts or
 rejects the same configs.
 
 ### 2.2 Other Inputs
 
-#### Ring Size Cap
-
-The client has a local cap on ring size, settable through a channel
-option, with a default of 4096. If `minRingSize` or `maxRingSize` is
-above the cap, it MUST be treated as the cap. When `ring_hash` is
-configured through xDS and the xDS resource does not set a maximum, the
-xDS layer sets `maxRingSize` to 8388608, so the effective maximum is the
-local cap (see [xDS LB Policies](../../09-xds/05-lb-policies.md)).
-
-#### Endpoint Attributes
-
-| Attribute | Default | Use |
-| --- | --- | --- |
-| Endpoint weight | 1 | Relative share of ring entries. |
-| `hash_key` | unset | If set and non-empty, the string hashed to place the endpoint on the ring. If unset or empty, the endpoint's first address is hashed. |
-
-If several endpoints share a `hash_key`, the endpoint chosen among them
-for a given ring position is unspecified.
+| Input | Location | Default | Used for |
+| --- | --- | --- | --- |
+| Ring size cap | Channel option | 4096 | Local cap on ring size. If `minRingSize` or `maxRingSize` is above the cap, it MUST be treated as the cap ([Ring Construction](#ring-construction)). When `ring_hash` is configured through xDS and the xDS resource does not set a maximum, the xDS layer sets `maxRingSize` to 8388608, so the effective maximum is the local cap (see [xDS LB Policies](../../09-xds/06-lb-policies.md)). |
+| Endpoint weight | Endpoint attribute endpoint weight, set by the resolver or, with xDS, by `cds` | 1 | Relative share of ring entries ([Ring Construction](#ring-construction)). Endpoints merged because they have the same address set have their weights added together ([Update](#33-updates-from-the-parent)). |
+| `hash_key` | Endpoint attribute `hash_key`, set by the resolver or, with xDS, by `cds` from the endpoint's `envoy.lb` metadata | unset | If set and non-empty, the string hashed to place the endpoint on the ring. If unset or empty, the endpoint's first address is hashed ([Ring Construction](#ring-construction)). If several endpoints share a `hash_key`, the endpoint chosen among them for a given ring position is unspecified. |
+| Request hash | Call attribute request hash, set by the [ConfigSelector](../05-call-dispatch.md) (the xDS ConfigSelector computes it from the route's hash policies; see [Call attributes](../../09-xds/05-client.md#53-call-attributes)) | — | The call's position on the ring, read by the picker only when `requestHashHeader` is empty. If it is unset, the pick fails with INTERNAL ([Picker Implementation](#4-picker-implementation)). |
+| Request header named by `requestHashHeader` | Pick argument: request metadata | — | When `requestHashHeader` is non-empty, the header's value is hashed to compute the request hash ([Picker Implementation](#4-picker-implementation)). |
 
 ## 3. LB Policy Implementation
 
 `ring_hash` implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+[LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
 
-### 3.1 State
+### 3.1 Internal State
 
 The policy keeps:
 
 - An **endpoint map**, keyed by endpoint identity (see
-  [Update](#32-update)). Each entry holds the endpoint's weight and
+  [Update](#33-updates-from-the-parent)). Each entry holds the endpoint's weight and
   `hash_key`, its `pick_first` child if one has been created
   ([Child Policies](#51-child-policies)), and the endpoint's current state
   and picker as last reported by that child (IDLE for an endpoint without
   a child).
-- The **ring** ([Ring Construction](#36-ring-construction)).
+- The **ring** ([Ring Construction](#ring-construction)).
 
-### 3.2 Update
+### 3.2 Features
 
-Endpoints are identified by the unordered set of their addresses,
-ignoring attributes. If the update contains several endpoints with the
-same address set, they are merged into one endpoint, and their weights
-are added together. Duplicate endpoints MUST NOT cause the update to be
-rejected.
-
-On each update with a non-empty endpoint list, `ring_hash`:
-
-1. Updates its endpoint map:
-   - Retained endpoints keep their `pick_first` child, if they have one,
-     and the child gets the endpoint's current address order.
-   - New endpoints start with no child.
-   - Removed endpoints' children are shut down.
-2. Rebuilds the ring from the endpoints and the (capped) ring sizes
-   ([Ring Construction](#36-ring-construction)). An endpoint's ring
-   positions change when its `hash_key`, its first address, or its weight
-   changes.
-3. Applies the proactive connection rule ([Proactive Connection Attempts](#38-proactive-connection-attempts)).
-4. Reports its aggregate state
-   ([Connectivity State Aggregation](#37-connectivity-state-aggregation))
-   and a new picker.
-
-It then returns OK.
-
-An empty endpoint list, or an endpoint error with no previous list,
-causes TRANSIENT_FAILURE and a rejected update (`UNAVAILABLE`, including
-the resolution note). An endpoint error when a previous list exists is
-handled per [Endpoint Errors](../05-load-balancing.md#42-endpoint-errors):
-the policy keeps using its previous endpoints.
-
-`ring_hash` MUST produce a new picker every time any endpoint's state
-changes, because the picker holds the ring together with the state of
-every endpoint (see [Calls From Children](#52-calls-from-children)).
-
-### 3.3 ExitIdle
-
-No effect: connections are started by picks
-([Picker Implementation](#4-picker-implementation)) and by the proactive
-connection rule
-([Proactive Connection Attempts](#38-proactive-connection-attempts)).
-
-### 3.4 ResetBackoff
-
-Forwarded to every existing `pick_first` child.
-
-### 3.5 Shutdown
-
-Shuts down every `pick_first` child.
-
-### 3.6 Ring Construction
+#### Ring Construction
 
 The ring is a list of `(hash, endpoint)` entries sorted by hash. Hashes
 are computed with XXH64 (xxHash, 64-bit) with seed 0. The ring is built
@@ -193,7 +133,7 @@ of entries, capped at `max_ring_size`.
 `FindIndexForHash(h)` returns the index of the first entry whose hash is
 greater than or equal to `h`, or 0 if there is none (the ring wraps).
 
-### 3.7 Connectivity State Aggregation
+#### Connectivity State Aggregation
 
 Endpoint states are the states reported by the `pick_first` children
 (IDLE for endpoints without a child). `pick_first` already keeps a failed
@@ -213,9 +153,9 @@ wins):
 With an entirely new set of endpoints (all IDLE), `ring_hash` reports
 IDLE. The `priority` policy restarts its failover timer when such a
 child later reports CONNECTING (see
-[`priority` LB Policy](priority.md#37-failover-timer)).
+[`priority` LB Policy](priority.md#failover-timer)).
 
-### 3.8 Proactive Connection Attempts
+#### Proactive Connection Attempts
 
 When `ring_hash` is a child of `priority`, it may get no picks while it
 reports TRANSIENT_FAILURE or CONNECTING. To make sure it recovers, after
@@ -243,6 +183,57 @@ if aggregated_state in (TRANSIENT_FAILURE, CONNECTING):
 `pick_first` children retry forever once they have failed (sticky
 TRANSIENT_FAILURE), so the number of endpoints trying to connect grows
 by one each time an attempt fails, until one connects.
+
+### 3.3 Updates from the Parent
+
+Endpoints are identified by the unordered set of their addresses,
+ignoring attributes. If the update contains several endpoints with the
+same address set, they are merged into one endpoint, and their weights
+are added together. Duplicate endpoints MUST NOT cause the update to be
+rejected.
+
+On each update with a non-empty endpoint list, `ring_hash`:
+
+1. Updates its endpoint map:
+   - Retained endpoints keep their `pick_first` child, if they have one,
+     and the child gets the endpoint's current address order.
+   - New endpoints start with no child.
+   - Removed endpoints' children are shut down.
+2. Rebuilds the ring from the endpoints and the (capped) ring sizes
+   ([Ring Construction](#ring-construction)). An endpoint's ring
+   positions change when its `hash_key`, its first address, or its weight
+   changes.
+3. Applies the proactive connection rule ([Proactive Connection Attempts](#proactive-connection-attempts)).
+4. Reports its aggregate state
+   ([Connectivity State Aggregation](#connectivity-state-aggregation))
+   and a new picker.
+
+It then returns OK.
+
+An empty endpoint list, or an endpoint error with no previous list,
+causes TRANSIENT_FAILURE and a rejected update (`UNAVAILABLE`, including
+the resolution note). An endpoint error when a previous list exists is
+handled per [Endpoint Errors](../06-load-balancing.md#42-endpoint-errors):
+the policy keeps using its previous endpoints.
+
+`ring_hash` MUST produce a new picker every time any endpoint's state
+changes, because the picker holds the ring together with the state of
+every endpoint (see [Calls From Children](#52-calls-from-children)).
+
+### 3.4 ExitIdle
+
+No effect: connections are started by picks
+([Picker Implementation](#4-picker-implementation)) and by the proactive
+connection rule
+([Proactive Connection Attempts](#proactive-connection-attempts)).
+
+### 3.5 ResetBackoff
+
+Forwarded to every existing `pick_first` child.
+
+### 3.6 Shutdown
+
+Shuts down every `pick_first` child.
 
 ## 4. Picker Implementation
 
@@ -315,18 +306,18 @@ reporting enabled. An endpoint without a child is treated as IDLE.
 
 Children are created by the picker or the proactive connection rule
 ("trigger a connection", [Picker Implementation](#4-picker-implementation)),
-updated or shut down by [Update](#32-update), and receive
+updated or shut down by [Update](#33-updates-from-the-parent), and receive
 `ResetBackoff()` and `Shutdown()` as specified in
-[ResetBackoff](#34-resetbackoff) and [Shutdown](#35-shutdown).
-`ExitIdle()` is not forwarded ([ExitIdle](#33-exitidle)).
+[ResetBackoff](#35-resetbackoff) and [Shutdown](#36-shutdown).
+`ExitIdle()` is not forwarded ([ExitIdle](#34-exitidle)).
 
 ### 5.2 Calls From Children
 
 - **`UpdateState(state, status, picker)`:** records the state and picker
   as the state of that child's endpoint, recomputes the aggregate state
-  ([Connectivity State Aggregation](#37-connectivity-state-aggregation)),
+  ([Connectivity State Aggregation](#connectivity-state-aggregation)),
   applies the proactive connection rule
-  ([Proactive Connection Attempts](#38-proactive-connection-attempts)),
+  ([Proactive Connection Attempts](#proactive-connection-attempts)),
   and reports the aggregate state with a new picker.
 - **`RequestReresolution()`:** forwarded to the policy's own helper.
 - **`CreateSubchannel(address, attributes)`:** passed through to the
@@ -346,6 +337,6 @@ The policy records no metrics.
 - gRPC MUST register this policy under the name `ring_hash_experimental`,
   so that it can be selected through `loadBalancingConfig` in the service
   config and used as a child by other policies, including custom ones
-  ([Load Balancing](../05-load-balancing.md)).
+  ([Load Balancing](../06-load-balancing.md)).
 - The channel API MUST provide a way to set the local ring size cap
-  (default 4096) ([Ring Size Cap](#ring-size-cap)).
+  (default 4096) ([Ring Size Cap](#22-other-inputs)).

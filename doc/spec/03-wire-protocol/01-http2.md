@@ -11,7 +11,7 @@ This section specifies how gRPC calls are carried over
 [HTTP/2](https://www.rfc-editor.org/rfc/rfc9113) framing. It assumes the reader
 knows HTTP/2. Transport behavior that is not about the per-call exchange
 (SETTINGS, flow control, keepalive, connection management) is in
-[HTTP/2 transport behavior](02-http2-transport.md).
+[HTTP/2 Client Transport](../04-client-channel/08-transports/02-http2.md) and [HTTP/2 Server Transport](../05-server/02-transports/02-http2.md).
 
 ## 1. Notation
 
@@ -80,15 +80,16 @@ Header-Name       = 1*( %x30-39 / %x61-7A / "_" / "-" / "." )   ; 0-9 a-z _ - .
 ASCII-Value       = 1*( %x20-7E )                              ; space and printable ASCII
 ```
 
-`Request-Headers` are sent as one HTTP/2 header block: a HEADERS frame followed
-by zero or more CONTINUATION frames.
+`Request-Headers` are sent as one HTTP/2 field block
+([RFC 9113 §4.3](https://www.rfc-editor.org/rfc/rfc9113#section-4.3)).
 
 ### 3.2 Header ordering
 
-HTTP/2 requires all pseudo-headers (names starting with `:`) to come before
-all regular headers. In addition, implementations SHOULD send `grpc-timeout`
-immediately after the pseudo-headers, and SHOULD send all `Call-Definition`
-headers before any `Custom-Metadata`.
+Pseudo-headers come first, as required by
+[RFC 9113 §8.3](https://www.rfc-editor.org/rfc/rfc9113#section-8.3). In
+addition, implementations SHOULD send `grpc-timeout` immediately after the
+pseudo-headers, and SHOULD send all `Call-Definition` headers before any
+`Custom-Metadata`.
 
 ### 3.3 `:method`, `:scheme`, and `:path`
 
@@ -98,17 +99,17 @@ headers before any `Custom-Metadata`.
   
 - `:path` is case-sensitive. It carries the full method name (see
   [Core RPC Semantics](../02-rpc-semantics/README.md)) prefixed by `/`. For
-  Protocol Buffers services, see [Protocol Buffers Mapping](05-protobuf.md).
+  Protocol Buffers services, see [Protocol Buffers Mapping](04-protobuf.md).
 
 Implementations MAY let applications override the `:path` format, but this is
 strongly discouraged. Features keyed on service and method names (for
-example, [service config](../04-client-channel/03-service-config.md) method
+example, [service config](../04-client-channel/04-service-config.md) method
 matching) do not work when the path does not have the form above.
 
 ### 3.4 `:authority` and `Host`
 
 The client SHOULD send `:authority`. Its value is the channel's authority or a
-per-call override; see [Channel](../04-client-channel/01-channel.md).
+per-call override; see [Channel](../04-client-channel/02-channel.md).
 
 Servers MUST look at both `:authority` and `Host`, to get one unambiguous
 authority for each request:
@@ -122,14 +123,14 @@ authority for each request:
 
 The resulting `:authority` is what is shown to the server application and to
 server-side authorization (see
-[Authorization](../06-security/03-authorization.md)).
+[Authorization](../06-security/04-authorization.md)).
 
 ### 3.5 Hop-by-hop headers
 
-HTTP/2 does not use hop-by-hop headers other than `te: trailers`. A transport
-MUST treat a request that contains a `Connection` header as malformed (an
-HTTP/2 stream error of type `PROTOCOL_ERROR`). This applies whether or not any
-other feature is in use.
+Transports MUST enforce the prohibition on connection-specific header fields
+(such as `Connection`) in
+[RFC 9113 §8.2.2](https://www.rfc-editor.org/rfc/rfc9113#section-8.2.2),
+whether or not any other feature is in use.
 
 ### 3.6 `te`
 
@@ -165,7 +166,7 @@ Deadline expiry is described in [Deadline expiry and cancellation](#84-deadline-
 - The client MUST send `content-type` starting with `application/grpc`.
   Bare `application/grpc` and `application/grpc+proto` both mean Protocol
   Buffers encoding. Other content-subtypes (`+{custom}`) name other
-  message encodings; see [Protocol Buffers Mapping](05-protobuf.md).
+  message encodings; see [Protocol Buffers Mapping](04-protobuf.md).
 - If `content-type` does not start with `application/grpc`, a gRPC server
   SHOULD respond with HTTP status 415 (Unsupported Media Type). Then other
   HTTP/2 clients will not mistake a gRPC error response (which uses HTTP
@@ -242,14 +243,15 @@ informational only.
 
 Its semantics, and those of the response header `grpc-retry-pushback-ms`
 ([Retry pushback](#66-retry-pushback)), are in
-[Retries](../04-client-channel/10-retries.md).
+[Retries](../04-client-channel/12-retries.md).
 
 ## 4. Metadata Encoding
 
 ### 4.1 Header names
 
-- HTTP/2 requires header names to be lowercase. Metadata keys are
-  case-insensitive. Implementations MUST send them in lowercase.
+- Metadata keys are case-insensitive. Implementations MUST send them in
+  lowercase, as HTTP/2 requires
+  ([RFC 9113 §8.2.1](https://www.rfc-editor.org/rfc/rfc9113#section-8.2.1)).
 - Custom metadata names MUST match `Header-Name` (plus the `-bin` suffix for
   binary metadata).
 - Names starting with `grpc-` are reserved for gRPC. Applications MUST NOT use
@@ -257,7 +259,7 @@ Its semantics, and those of the response header `grpc-retry-pushback-ms`
   `grpc-encoding`, `grpc-accept-encoding`, `grpc-message-type`, `grpc-status`,
   `grpc-message`, `grpc-status-details-bin`, `grpc-previous-rpc-attempts`,
   `grpc-retry-pushback-ms`, and `grpc-trace-bin` (see
-  [Tracing](../08-observability/04-tracing.md)).
+  [Tracing](../08-observability/05-tracing.md)).
 - Pseudo-headers, `te`, `content-type`, and `user-agent` are set by the gRPC
   library. They are not application metadata.
 - A full list of metadata keys is in
@@ -286,7 +288,7 @@ ending in `-bin`) is base64-encoded with the standard alphabet
 - The gRPC library does the encoding and decoding. Applications see the raw
   bytes, and the `-bin` suffix tells the library which keys to treat this way.
 - When the peer has enabled it,
-  [True binary metadata](03-true-binary-metadata.md) allows sending the raw
+  [True binary metadata](02-true-binary-metadata.md) allows sending the raw
   bytes instead.
 
 ### 4.4 Duplicate keys and ordering
@@ -306,13 +308,13 @@ ending in `-bin`) is base64-encoded with the standard alphabet
   size of `Response-Headers`, `Trailers`, and `Trailers-Only`.
   Implementations SHOULD provide a safe default limit for received header
   lists. The value of the default is up to the implementation.
-- Implementations SHOULD compute header size the same way as HTTP/2's
-  `SETTINGS_MAX_HEADER_LIST_SIZE`. That is the sum over all header fields of
-  (uncompressed name length + uncompressed value length + 32). The length of a
-  binary value is its length after base64 encoding.
+- Implementations SHOULD compute header size as defined for
+  `SETTINGS_MAX_HEADER_LIST_SIZE`
+  ([RFC 9113 §6.5.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.5.2)).
+  The length of a binary value is its length after base64 encoding.
 - Implementations SHOULD advertise their limit to the peer in
   `SETTINGS_MAX_HEADER_LIST_SIZE` (see
-  [HTTP/2 Transport Behavior](02-http2-transport.md#12-settings-sent)).
+  [HTTP/2 Client Transport: SETTINGS](../04-client-channel/08-transports/02-http2.md#22-settings) and [HTTP/2 Server Transport: SETTINGS](../05-server/02-transports/02-http2.md#21-settings)).
 - When the received headers exceed the limit, the receiver MUST fail the call.
   A server SHOULD respond with `RESOURCE_EXHAUSTED` in Trailers-Only, or reset
   the stream if it cannot. A client SHOULD report `RESOURCE_EXHAUSTED` to the
@@ -352,8 +354,9 @@ Message                 = *OCTET
 DATA frame boundaries have no relation to `Length-Prefixed-Message`
 boundaries. One message MAY span many DATA frames, and one DATA frame MAY
 hold parts of several messages. Implementations MUST NOT assume any alignment.
-DATA frames MAY be padded. Receivers MUST handle padding correctly, including
-in flow-control accounting.
+DATA frame padding
+([RFC 9113 §6.1](https://www.rfc-editor.org/rfc/rfc9113#section-6.1)) is not
+part of the message stream.
 
 ### 5.1 End of stream (EOS)
 
@@ -402,7 +405,7 @@ Percent-Byte-Encoded   = "%" 2HEXDIG
 
 A client treats a call as committed once it receives `Response-Headers`, so it
 cannot retry the call after that point (see
-[Retries](../04-client-channel/10-retries.md)). To keep retries possible:
+[Retries](../04-client-channel/12-retries.md)). To keep retries possible:
 
 - Servers SHOULD hold back `Response-Headers` until the first response message
   is sent or the application explicitly sends headers, whichever comes first.
@@ -442,7 +445,7 @@ different reserved characters:
 
 - `Status-Details` MAY be sent only when `Status` is not `OK`. It holds more
   information about the error, as a serialized message. For Protocol Buffers
-  this is `google.rpc.Status` (see [Protocol Buffers Mapping](05-protobuf.md)).
+  this is `google.rpc.Status` (see [Protocol Buffers Mapping](04-protobuf.md)).
 - If the details contain a status code or message, they MUST match
   `grpc-status` and `grpc-message`. The sender is responsible for this. A
   receiving gRPC library MAY check it and MAY act on a mismatch, or on
@@ -462,7 +465,7 @@ different reserved characters:
   retrying.
 - A negative or unparseable value means the server asks the client not to
   retry.
-- See [Retries](../04-client-channel/10-retries.md).
+- See [Retries](../04-client-channel/12-retries.md).
 
 ### 6.7 Content-type in responses
 
@@ -531,10 +534,12 @@ the `Status` and `Status-Message` in `Trailers` (or `Trailers-Only`).
 ### 8.2 RST_STREAM
 
 - Sometimes the framing of the message stream is corrupt, or a call must end
-  abruptly. The runtime then uses `RST_STREAM` to tell its peer.
-- Receivers MUST treat `RST_STREAM` as an immediate full closure of the stream
-  and MUST pass an error up to the application.
-- Inbound and outbound buffered data for the stream is discarded.
+  abruptly. The runtime then uses `RST_STREAM`
+  ([RFC 9113 §6.4](https://www.rfc-editor.org/rfc/rfc9113#section-6.4)) to
+  tell its peer.
+- A receiver of `RST_STREAM` MUST pass an error up to the application
+  immediately. Inbound and outbound buffered data for the stream is
+  discarded.
 
 RST_STREAM error codes map to gRPC status codes as follows:
 
@@ -547,7 +552,7 @@ RST_STREAM error codes map to gRPC status codes as follows:
 | `SETTINGS_TIMEOUT` (0x4) | `INTERNAL` |
 | `STREAM_CLOSED` (0x5) | No mapping, because there is no open stream to report to. Implementations SHOULD log it. |
 | `FRAME_SIZE_ERROR` (0x6) | `INTERNAL` |
-| `REFUSED_STREAM` (0x7) | `UNAVAILABLE`. No processing happened, and the request can be retried, possibly elsewhere. Eligible for transparent retry (see [Retries and Hedging](../04-client-channel/10-retries.md)). |
+| `REFUSED_STREAM` (0x7) | `UNAVAILABLE`. No processing happened, and the request can be retried, possibly elsewhere. Eligible for transparent retry (see [Retries and Hedging](../04-client-channel/12-retries.md)). |
 | `CANCEL` (0x8) | Sent by a client: the server treats the call as cancelled. Sent by a server: the client reports `CANCELLED`. Servers SHOULD use it only when they must cancel a call and cannot send a complete response (for example, because a message is only partly sent). |
 | `COMPRESSION_ERROR` (0x9) | `INTERNAL` |
 | `CONNECT_ERROR` (0xa) | `INTERNAL` |
@@ -585,7 +590,7 @@ If a client receives `RST_STREAM` after it already received the complete
   [Server sending trailers before the request ends](#83-server-sending-trailers-before-the-request-ends). If it
   does not send `Trailers`, it MUST send `RST_STREAM` with `CANCEL`, if the
   stream is not already closed.
-  <!-- REVIEW(divergence) [SERVER-1]: Java: RST_STREAM(CANCEL) only, no trailers (ServerImpl.ServerStreamCancellationListener -> NettyServerStream.cancel -> CancelServerStreamCommand.withReset). Go: RST_STREAM(CANCEL) only, from a per-stream timer (http2_server.go closeStream(..., ErrCodeCancel)); a deadline already expired on arrival gets Trailers-Only DEADLINE_EXCEEDED. C++: DEADLINE_EXCEEDED trailers then RST_STREAM(NO_ERROR) (chttp2_transport.cc close_from_api). Spec previously required RST_STREAM(CANCEL) even after trailers, which C++ does not do; it now allows either: trailers followed by the [Server sending trailers before the request ends](#83-server-sending-trailers-before-the-request-ends) reset (NO_ERROR), or RST_STREAM(CANCEL) alone. [Core RPC Semantics: Communication and Enforcement](../02-rpc-semantics/README.md#82-communication-and-enforcement) and [Server: Deadlines](../05-server/README.md#25-deadlines) say the same. -->
+  <!-- REVIEW(divergence) [SERVER-1]: Java: RST_STREAM(CANCEL) only, no trailers (ServerImpl.ServerStreamCancellationListener -> NettyServerStream.cancel -> CancelServerStreamCommand.withReset). Go: RST_STREAM(CANCEL) only, from a per-stream timer (http2_server.go closeStream(..., ErrCodeCancel)); a deadline already expired on arrival gets Trailers-Only DEADLINE_EXCEEDED. C++: DEADLINE_EXCEEDED trailers then RST_STREAM(NO_ERROR) (chttp2_transport.cc close_from_api). Spec previously required RST_STREAM(CANCEL) even after trailers, which C++ does not do; it now allows either: trailers followed by the [Server sending trailers before the request ends](#83-server-sending-trailers-before-the-request-ends) reset (NO_ERROR), or RST_STREAM(CANCEL) alone. [Core RPC Semantics: Communication and Enforcement](../02-rpc-semantics/README.md#82-communication-and-enforcement) and [Server: Deadlines](../05-server/01-server.md#25-deadlines) say the same. -->
 - Clients and servers race to detect deadline expiry. When a client gets a
   cancellation (for example `RST_STREAM CANCEL`) on a call whose deadline has
   passed, it MUST report `DEADLINE_EXCEEDED`, not `CANCELLED`.
@@ -600,64 +605,49 @@ handles more than one connection, and MUST NOT be used as global identifiers.
 
 ### 9.2 GOAWAY
 
-A server sends GOAWAY to say it will accept no new streams on the connection.
+Servers SHOULD shut down connections gracefully, with GOAWAY, as described in
+[RFC 9113 §6.8](https://www.rfc-editor.org/rfc/rfc9113#section-6.8). gRPC
+adds:
 
-- GOAWAY carries the last stream ID the server accepted. Streams with a higher
-  ID were not processed.
-- Servers SHOULD send GOAWAY before closing a connection, so clients reliably
-  learn which work was accepted.
-
-Graceful shutdown (two-phase GOAWAY):
-
-1. The server sends a GOAWAY with last-stream-id 2^31-1 and error code
-   `NO_ERROR`. This tells the client to stop creating streams without
-   rejecting streams that are already in flight.
-2. After at least one round-trip time, the server sends a second GOAWAY whose
-   last-stream-id is the highest stream ID it actually accepted. The server
-   SHOULD measure the round trip by sending a PING after the first GOAWAY and
-   waiting for its ACK. It SHOULD also put an upper bound on the time between
-   the two GOAWAYs.
-3. Outstanding streams are allowed to finish. The server then closes the
-   connection, possibly after a grace period (see
-   [HTTP/2 Transport Behavior](02-http2-transport.md#5-server-connection-management)).
+- The server SHOULD measure the round trip between the two GOAWAYs by sending
+  a PING after the first GOAWAY and waiting for its ACK. It SHOULD also put an
+  upper bound on the time between the two GOAWAYs.
+- After the second GOAWAY, outstanding streams are allowed to finish. The
+  server then closes the connection, possibly after a grace period (see
+  [HTTP/2 Server Transport: Connection Management](../05-server/02-transports/02-http2.md#6-connection-management)).
 
 Debug data: GOAWAY frames sent by gRPC SHOULD carry ASCII debug data that
 gives the reason. These strings are defined:
 
 | Debug data | Error code | Meaning |
 | ---------- | ---------- | ------- |
-| `max_idle` | `NO_ERROR` | The connection reached `MAX_CONNECTION_IDLE` ([HTTP/2 Transport Behavior: Server Connection Management](02-http2-transport.md#5-server-connection-management)). |
-| `max_age` | `NO_ERROR` | The connection reached `MAX_CONNECTION_AGE` ([HTTP/2 Transport Behavior: Server Connection Management](02-http2-transport.md#5-server-connection-management)). |
-| `too_many_pings` | `ENHANCE_YOUR_CALM` | The client broke the server's ping policy ([Server ping enforcement](02-http2-transport.md#43-server-ping-enforcement)). |
+| `max_idle` | `NO_ERROR` | The connection reached `MAX_CONNECTION_IDLE` ([HTTP/2 Server Transport: Connection Management](../05-server/02-transports/02-http2.md#6-connection-management)). |
+| `max_age` | `NO_ERROR` | The connection reached `MAX_CONNECTION_AGE` ([HTTP/2 Server Transport: Connection Management](../05-server/02-transports/02-http2.md#6-connection-management)). |
+| `too_many_pings` | `ENHANCE_YOUR_CALM` | The client broke the server's ping policy ([HTTP/2 Server Transport: Ping Enforcement](../05-server/02-transports/02-http2.md#72-ping-enforcement)). |
 
-Client handling of GOAWAY:
+Clients handle GOAWAY as described in RFC 9113 §6.8. In addition:
 
-- The client MUST NOT start new streams on the connection.
-- A server may send more than one GOAWAY, and the client MUST handle that.
-  The last-stream-id never increases.
 - Streams with IDs above the last-stream-id were not processed. The client
   MUST fail them with `UNAVAILABLE`, and they are eligible for transparent
-  retry (see [Retries and Hedging](../04-client-channel/10-retries.md)).
-- Streams with IDs at or below the last-stream-id MAY continue until they
-  finish or the connection closes.
-- If the connection closes while such streams are still open, they fail as
-  described in
+  retry (see [Retries and Hedging](../04-client-channel/12-retries.md)).
+- If the connection closes while streams at or below the last-stream-id are
+  still open, they fail as described in
   [Connection failure](#94-connection-failure).
 - A GOAWAY with `ENHANCE_YOUR_CALM` and debug data `too_many_pings` makes the
   client raise its keepalive interval
-  ([Client keepalive](02-http2-transport.md#41-client-keepalive)).
+  ([HTTP/2 Client Transport: Keepalive](../04-client-channel/08-transports/02-http2.md#61-keepalive)).
 - The effect of GOAWAY on the subchannel and channel is in
-  [HTTP/2 Transport Behavior: Client Handling of GOAWAY](02-http2-transport.md#6-client-handling-of-goaway).
+  [HTTP/2 Client Transport: Handling GOAWAY](../04-client-channel/08-transports/02-http2.md#51-handling-goaway).
 
 ### 9.3 PING
 
-- Both clients and servers can send PING frames. The peer MUST reply right
-  away with a PING ACK that echoes the payload exactly.
-- PING is used to check that the connection is alive (keepalive), to estimate
-  round-trip latency, and to estimate bandwidth-delay product.
+- Both clients and servers can send PING frames
+  ([RFC 9113 §6.7](https://www.rfc-editor.org/rfc/rfc9113#section-6.7)).
+- gRPC uses PING to check that the connection is alive (keepalive), to
+  estimate round-trip latency, and to estimate bandwidth-delay product.
 - How often to ping depends heavily on the network. Implementations MAY adjust
   the frequency to fit network and application needs, within the limits in
-  [HTTP/2 Transport Behavior: Keepalive](02-http2-transport.md#4-keepalive).
+  [HTTP/2 Client Transport: Liveness](../04-client-channel/08-transports/02-http2.md#6-liveness).
 
 If a PING sent by the server gets no ACK within the expected time, the
 server closes the connection, and all its outstanding calls on it end as
@@ -674,20 +664,20 @@ connection failure, its open calls on that connection are cancelled.
 
 ### 9.5 Transport security
 
-- When TLS is used, it MUST be TLS 1.2 or later. HTTP/2's extra TLS
-  requirements apply
-  ([RFC 9113 §9.2](https://www.rfc-editor.org/rfc/rfc9113#section-9.2)),
-  including the cipher-suite restrictions and SNI support.
-- When TLS is used, clients MUST offer the ALPN protocol ID `h2`, and servers
-  MUST select `h2`. Both clients and servers MUST fail the connection if `h2`
-  is not negotiated.
+- When TLS is used, the TLS requirements of
+  [RFC 9113 §9.2](https://www.rfc-editor.org/rfc/rfc9113#section-9.2) apply
+  (TLS 1.2 or later, cipher-suite restrictions, and SNI).
+- When TLS is used, clients MUST offer the ALPN protocol ID `h2`
+  ([RFC 9113 §3.2](https://www.rfc-editor.org/rfc/rfc9113#section-3.2)), and
+  servers MUST select it. Both clients and servers MUST fail the connection if
+  `h2` is not negotiated.
 - Without TLS (plaintext), HTTP/2 is used with prior knowledge
   ([RFC 9113 §3.3](https://www.rfc-editor.org/rfc/rfc9113#section-3.3)). The
   HTTP/1.1 `Upgrade` mechanism is not used.
 - HTTP/2 may also run over other transport security mechanisms. This
   specification makes no recommendation about them.
 - Credentials and the security model are in
-  [Security](../06-security/README.md) and [TLS](../06-security/01-tls.md).
+  [Security](../06-security/README.md) and [TLS](../06-security/02-tls.md).
 
 ## 10. Idempotency and Retries
 
@@ -705,7 +695,7 @@ is. Specifically:
   
 The wire signals that prove a call was not processed are `REFUSED_STREAM`, and
 GOAWAY with a last-stream-id below the stream's ID. The retry rules built on
-them are in [Retries](../04-client-channel/10-retries.md).
+them are in [Retries](../04-client-channel/12-retries.md).
 
 ## 11. Examples
 

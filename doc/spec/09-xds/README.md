@@ -30,231 +30,26 @@ defined by the Envoy and CNCF xDS documentation
 (https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol). This
 section describes only gRPC's use of it and where gRPC differs from Envoy.
 
-## 1. Architecture
+## Contents
 
-### 1.1 Common component: the XdsClient
-
-Every xDS-enabled component in gRPC talks to the management server through an
-internal **XdsClient** object (see [XdsClient](02-xds-client.md)). The
-XdsClient is configured by the **bootstrap configuration** (see
-[Bootstrap](01-bootstrap.md)). It keeps the ADS streams to the xDS servers,
-manages subscriptions, validates and caches resources, and notifies
-*watchers* when resources change or errors occur. The XdsClient is not part of
-gRPC's public API.
-
-There is one XdsClient instance per data-plane target. All channels created for
-the same target share an instance. All xDS-enabled servers in the process share
-one instance, keyed by the reserved key `#server`.
-
-### 1.2 Client side
-
-An application turns on xDS for a channel by creating it with a target URI that
-uses the `xds` scheme (for example, `xds:///myservice.example.com:8080`). The
-client-side components are:
-
-- **xds resolver** (`xds` URI scheme): gets the XdsClient for the target and
-  works out the Listener resource name (see [Client](04-client.md)).
-- **XdsDependencyManager**: owned by the resolver. It watches the Listener,
-  the RouteConfiguration, every Cluster that the routes reference (following
-  aggregate clusters recursively), and the endpoint resources (EDS resources,
-  `LbEndpointCollection` resources, or DNS resolution for LOGICAL_DNS
-  clusters). When it has a complete, consistent set of resources, it produces
-  an `XdsConfig` snapshot. The resolver returns this snapshot to the channel
-  as a resolver attribute, together with a generated service config.
-- **xDS ConfigSelector**: returned by the resolver. For each RPC, it matches
-  the RPC against the virtual host's routes, picks a cluster (applying
-  weighted cluster selection), and applies per-route config: timeouts, retry
-  policy, hash policies, and xDS HTTP filter config. See
-  [Client](04-client.md) and [xDS HTTP Filters](06-http-filters.md).
-- **xDS LB policy tree**: the generated service config selects
-  `xds_cluster_manager` at the top. It has one `cds` child per cluster. Each
-  `cds` policy builds its subtree from the `XdsConfig`: for an aggregate
-  cluster, a `priority` policy over child `cds` policies; for a leaf cluster,
-  `outlier_detection` → `xds_cluster_impl` → `xds_override_host` → `priority`
-  (one child per xDS priority) → the cluster's configured endpoint-picking
-  policy (by default `xds_wrr_locality` → `weighted_target` →
-  `round_robin`). See [xDS LB Policies](05-lb-policies.md).
-- **LRS client**: reports load to the LRS server when a cluster enables it.
-  See [Load Reporting](09-load-reporting.md).
-
-### 1.3 Server side
-
-An **xDS-enabled server** (see [xDS-Enabled Servers](07-server.md)) gets the
-XdsClient instance keyed by `#server`. For each listening address, it builds a
-Listener resource name from the bootstrap
-`server_listener_resource_name_template` and watches that Listener. The
-Listener's filter chains choose the per-connection security config (see
-[xDS Security](08-security.md)) and the HTTP connection manager config. That
-config includes RouteConfiguration (inline or via RDS) and xDS HTTP filters
-such as RBAC. The server is *serving* or *not serving* depending on whether it
-has a valid Listener.
-
-### 1.4 Component diagram
-
-```mermaid
-flowchart TD
-  subgraph Process
-    BS["Bootstrap config"]
-    subgraph ClientChannel["Client channel (xds:///target)"]
-      RES["xds resolver"]
-      DM["XdsDependencyManager"]
-      CS["xDS ConfigSelector"]
-      subgraph LBTree["xDS LB policy tree"]
-        XCM["xds_cluster_manager"]
-        CDS["cds (per cluster)"]
-        SUB["outlier_detection / xds_cluster_impl / xds_override_host / priority / endpoint picking"]
-      end
-    end
-    subgraph Server["xDS-enabled server"]
-      LW["Listener watcher + filter chain matching"]
-      SF["Per-RPC routing + xDS HTTP filters (e.g. RBAC)"]
-    end
-    XC1["XdsClient (key: target)"]
-    XC2["XdsClient (key: #server)"]
-    CSDS["CSDS service"]
-    LRS["LRS client"]
-  end
-  CP[("xDS management server(s)")]
-  LRSS[("LRS server")]
-
-  BS --> XC1
-  BS --> XC2
-  RES --> DM
-  DM -- "watch LDS/RDS/CDS/EDS" --> XC1
-  RES -- "XdsConfig + service config" --> CS
-  RES --> XCM
-  XCM --> CDS --> SUB
-  LW -- "watch LDS/RDS" --> XC2
-  LW --> SF
-  XC1 -- "ADS stream(s)" --> CP
-  XC2 -- "ADS stream(s)" --> CP
-  SUB -- "load stats" --> LRS --> LRSS
-  CSDS -- "dump" --> XC1
-  CSDS -- "dump" --> XC2
-```
-
-## 2. Design Principles
-
-### 2.1 Transport protocol variant
-
-- gRPC MUST use **xDS v3** only. The ADS method is
-  `/envoy.service.discovery.v3.AggregatedDiscoveryService/StreamAggregatedResources`,
-  and gRPC requests and accepts only the v3 resource type URLs listed above.
-- gRPC MUST use the **Aggregated Discovery Service (ADS)**, where all resource
-  types share one bidirectional stream per xDS server.
-- gRPC MUST use the **state-of-the-world (SotW)** protocol variant. The
-  incremental (delta) variants, non-aggregated (per-type) xDS services, and
-  REST or filesystem subscriptions are not used.
-- Every `ConfigSource` in a resource that tells gRPC where to fetch another
-  resource MUST say to use the same xDS server: `ads` or `self` for RDS and
-  EDS references, and `self` for `LbEndpointCollection` references and for
-  the Cluster `lrs_server`. The rules are in
-  [Common Types](03-resources/01-common-types.md).
-
-### 2.2 Handling of unknown and unsupported configuration
-
-The xDS APIs contain many fields that gRPC does not support. To stay
-compatible with management servers and newer API versions:
-
-1. **Unknown or unsupported fields MUST be ignored.** gRPC does not log when
-   it ignores a field.
-2. **NACK when a supported field has an unsupported value.** If gRPC
-   supports a field but the resource sets it to a value that gRPC does not
-   support (for example, an LB policy that gRPC does not implement in a
-   field that requires one), the resource is invalid and the response is
-   NACKed.
-3. **NACK when ignoring a field would be unsafe.** If ignoring a field would
-   weaken security (for example, a security-related setting that gRPC cannot
-   honor) or would change how other, supported fields are interpreted, then
-   gRPC MUST treat the resource as invalid rather than ignore the field.
-4. NACKs work per resource. Valid resources in a NACKed response are still
-   accepted and used. Only the invalid resources are rejected. See
-   [XdsClient](02-xds-client.md).
-5. Resource-specific validation rules appear in
-   [Resources](03-resources/01-common-types.md) and in the documents for each
-   feature.
-
-Because unsupported field values cause NACKs, operators MUST make sure that
-every client supports a feature before configuring it in a way older clients
-would reject.
-
-Unknown fields in the bootstrap configuration are also ignored (see
-[Bootstrap](01-bootstrap.md)).
-
-### 2.3 Status codes
-
-The XdsClient passes status codes to its watchers that describe xDS-level
-conditions, such as NOT_FOUND for a resource that does not exist. These codes
-MUST NOT be passed through to data-plane RPCs. When an xDS condition causes a
-data-plane RPC to fail, gRPC MUST use one of the codes that gRPC itself is
-allowed to generate, normally UNAVAILABLE (see
-[Core RPC Semantics](../02-rpc-semantics/README.md)).
-
-### 2.4 Configuration from a single server
-
-A channel or server listener SHOULD use a set of resources that all come from
-the same xDS server. Fallback (see [XdsClient](02-xds-client.md)) is
-therefore decided per authority and per XdsClient instance, not per resource.
-
-## 3. Client Features
-
-gRPC advertises its capabilities to the management server by listing
-*client features* in the `client_features` field of the xDS `Node` message.
-The `Node` message is sent in the first request on each ADS stream (and on
-each LRS stream). gRPC MUST list exactly the features that it supports:
-
-| Client feature | Sent on | Meaning |
-| --- | --- | --- |
-| `envoy.lb.does_not_support_overprovisioning` | ADS, LRS | gRPC ignores the EDS `overprovisioning_factor` and does not do graceful (overprovisioning-based) failover between priorities or localities. The management server is expected to shift traffic itself when that is needed. |
-| `xds.config.resource-in-sotw` | ADS | The client accepts resources wrapped in `envoy.service.discovery.v3.Resource` messages in SotW responses. |
-| `xds.endpoint.supports_lb_endpoint_collection` | ADS | The client supports EDS localities that reference `LbEndpointCollection` list-collection resources (see [EDS](03-resources/05-endpoint.md)). |
-| `envoy.lrs.supports_send_all_clusters` | LRS | The client supports the LRS `send_all_clusters` field (see [Load Reporting](09-load-reporting.md)). |
-
-gRPC also fills in `user_agent_name` and `user_agent_version` in the `Node`
-(see [Bootstrap](01-bootstrap.md)).
-
-## 4. Server Features
-
-*Server features* are strings in the `server_features` list of an xDS server
-entry in the bootstrap configuration. They describe a property of that one
-server. gRPC MUST ignore server features that it does not recognize. Full
-semantics are in [Bootstrap](01-bootstrap.md).
-
-| Server feature | Effect |
-| --- | --- |
-| `fail_on_data_errors` | On a data error (NACK, LDS/CDS deletion, or a server-reported NOT_FOUND or PERMISSION_DENIED) for a resource that is already cached, drop the cached resource and fail. Without it, keep using the cached resource. |
-| `resource_timer_is_transient_error` | The does-not-exist timer is 30 s instead of 15 s. When it fires, the result is a transient error (UNAVAILABLE, cache state `TIMEOUT`) rather than does-not-exist. |
-| `trusted_xds_server` | The server is trusted for security-sensitive features. This enables authority rewriting (`RouteAction.auto_host_rewrite`). |
-| `ignore_resource_deletion` | Recognized but has no effect. |
-| `xds_v3` | Recognized but has no effect (v3 is always used). |
-
-## 5. Contents
-
-| Document | Content |
-| --- | --- |
-| [Bootstrap](01-bootstrap.md) | Bootstrap configuration |
-| [XdsClient](02-xds-client.md) | Transport, subscriptions, resource naming and federation, watchers, caching, error handling, fallback |
-| [Common Types](03-resources/01-common-types.md) | Matchers, metadata, and other shared resource types |
-| [Listener](03-resources/02-listener.md) | LDS: Listener (client side) |
-| [RouteConfiguration](03-resources/03-route-configuration.md) | RDS: RouteConfiguration |
-| [Cluster](03-resources/04-cluster.md) | CDS: Cluster |
-| [ClusterLoadAssignment and LbEndpointCollection](03-resources/05-endpoint.md) | EDS: ClusterLoadAssignment and LbEndpointCollection |
-| [Client Data Plane](04-client.md) | `xds` resolver, XdsDependencyManager, XdsConfig, routing |
-| [xDS LB Policies](05-lb-policies.md) | LB policy tree, xDS LB policy registry, list of xDS LB policies |
-| [xDS HTTP Filters](06-http-filters.md) | Filter framework and the supported filters |
-| [xDS-Enabled Servers](07-server.md) | Serving state, Listener handling, filter chain matching |
-| [xDS Security](08-security.md) | xDS credentials and TLS configuration |
-| [Load Reporting (LRS)](09-load-reporting.md) | Load reporting to the control plane |
-| [Client Status Discovery Service (CSDS)](10-csds.md) | Exposing xDS configuration for debugging |
-
-## 6. API Requirements
-
-- The channel API MUST let an application create an xDS-enabled channel by
-  using a target URI with the `xds` scheme (see [Client](04-client.md)).
-- The server API MUST provide a way to create an xDS-enabled server (see
-  [xDS-Enabled Servers](07-server.md)).
-- gRPC MUST provide a way to supply the bootstrap configuration (see
-  [Bootstrap](01-bootstrap.md)).
-- gRPC MUST provide the CSDS service so that applications can register it on
-  a server (see [CSDS](10-csds.md) and
-  [Admin Interface](../07-services/04-admin.md)).
+- [9.1 Architecture and Design Principles](01-architecture.md): components, design principles, client features, server features
+- [9.2 Bootstrap](02-bootstrap.md): bootstrap configuration
+- [9.3 XdsClient](03-xds-client.md): transport, subscriptions, resource naming and federation, watchers, caching, error handling, fallback
+- 9.4 Resources and Validation
+  - [9.4.1 Common Types](04-resources/01-common-types.md)
+  - [9.4.2 Listener](04-resources/02-listener.md)
+  - [9.4.3 RouteConfiguration](04-resources/03-route-configuration.md)
+  - [9.4.4 Cluster](04-resources/04-cluster.md)
+  - [9.4.5 ClusterLoadAssignment and LbEndpointCollection](04-resources/05-endpoint.md)
+- [9.5 Client Data Plane](05-client.md): `xds` resolver, XdsDependencyManager, XdsConfig, routing
+- [9.6 xDS LB Policies](06-lb-policies.md): LB policy tree and the xDS LB policy registry
+  - [`xds_cluster_manager`](lb-policies/xds_cluster_manager.md)
+  - [`cds`](lb-policies/cds.md)
+  - [`xds_cluster_impl`](lb-policies/xds_cluster_impl.md)
+  - [`xds_override_host`](lb-policies/xds_override_host.md)
+  - [`xds_wrr_locality`](lb-policies/xds_wrr_locality.md)
+- [9.7 xDS HTTP Filters](07-http-filters.md): filter framework, router, fault injection, RBAC, stateful session affinity, GCP authentication
+- [9.8 xDS-Enabled Servers](08-server.md): serving state, Listener handling, filter chain matching
+- [9.9 xDS Security](09-security.md): xDS credentials and TLS configuration
+- [9.10 Load Reporting (LRS)](10-load-reporting.md): load reporting to the control plane
+- [9.11 Client Status Discovery Service (CSDS)](11-csds.md): exposing xDS configuration for debugging

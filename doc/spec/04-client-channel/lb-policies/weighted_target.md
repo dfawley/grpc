@@ -16,10 +16,10 @@
 ## 1. Overview
 
 `weighted_target` is a parent policy (see
-[Policy Hierarchy](../05-load-balancing.md#9-policy-hierarchy)) with named,
+[Policy Hierarchy](../06-load-balancing.md#9-policy-hierarchy)) with named,
 weighted children. It spreads calls randomly across its READY children in
 proportion to their weights. xDS uses it to pick a locality within a
-priority (see [xDS LB Policies](../../09-xds/05-lb-policies.md)), but it is
+priority (see [xDS LB Policies](../../09-xds/06-lb-policies.md)), but it is
 not xDS-specific. Only READY children get calls when any child is READY.
 This differs from Envoy's weighted clusters, which also count children
 that are not READY.
@@ -46,12 +46,12 @@ Proto: `WeightedTargetLoadBalancingPolicyConfig` in
 | --- | --- | --- | --- | --- |
 | `targets` | map of string → object | No | empty map | The children. The map key is the child's name, which is its identity across updates. |
 | `targets{}.weight` | uint32 | Yes | — | The child's weight. MUST be greater than 0. |
-| `targets{}.childPolicy` | `LoadBalancingConfig list` | Yes | — | The child's policy. Resolved as specified in [LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration). |
+| `targets{}.childPolicy` | `LoadBalancingConfig list` | Yes | — | The child's policy. Resolved as specified in [LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration). |
 
 ### 2.1 Validation
 
 The config is invalid, and is rejected as specified in
-[LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration),
+[LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration),
 if any of the following holds:
 
 - A target's `weight` is missing or zero.
@@ -61,27 +61,32 @@ if any of the following holds:
 
 ### 2.2 Other Inputs
 
-- The hierarchical path attribute of each endpoint, used to route the
-  endpoint to a child ([Hierarchical Address Paths](../05-load-balancing.md#94-hierarchical-address-paths)).
+| Input | Location | Default | Used for |
+| --- | --- | --- | --- |
+| Hierarchical path | Endpoint attribute hierarchical path, set by the parent that routes endpoints to named children (with xDS, by `cds`, with the first element removed by `priority`) | — | The first element names the target whose child receives the endpoint, and is removed before the endpoint is passed down ([Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths); [Update](#33-updates-from-the-parent)). |
 
 ## 3. LB Policy Implementation
 
 The policy implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+[LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
 
-### 3.1 State
+### 3.1 Internal State
 
 - The children, keyed by target name.
 - For each child, its latest reported connectivity state and picker
   ([Calls From Children](#52-calls-from-children)).
 
-### 3.2 Update
+### 3.2 Features
+
+None.
+
+### 3.3 Updates from the Parent
 
 On each update, the policy:
 
 1. Splits the endpoints by hierarchical path (the first path element is
    the target name, removed before passing down; see
-   [Hierarchical Address Paths](../05-load-balancing.md#94-hierarchical-address-paths)).
+   [Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths)).
 2. For each target in the config, creates the child if needed, or
    updates the existing child of that name, passing it the update
    described in [Child Policies](#51-child-policies). If a child's policy
@@ -100,15 +105,15 @@ later update adds the name back, a new child is created.
 
 <!-- REVIEW(divergence) [WEIGHTED_TARGET-1]: Java and Go delete removed children immediately (grpc-java WeightedTargetLoadBalancer shutdown, with "TODO cache removed target for 15 minutes"; grpc-go balancer/weightedtarget/weightedtarget.go SubBalancerCloseTimeout: 0, "Disable caching of removed child policies"). C++ deactivates them and deletes them after 15 minutes (src/core/load_balancing/weighted_target/weighted_target.cc DeactivateLocked, kChildRetentionInterval). gRFC A28 says "When a child policy is removed, it will be cached for 15 minutes." The spec now says immediate deletion, following the Java/Go majority. This is consistent with priority.md. -->
 
-### 3.3 ExitIdle
+### 3.4 ExitIdle
 
 Forwarded to all children.
 
-### 3.4 ResetBackoff
+### 3.5 ResetBackoff
 
 Forwarded to all children.
 
-### 3.5 Shutdown
+### 3.6 Shutdown
 
 Deletes all children.
 
@@ -122,7 +127,7 @@ chosen child's picker. In CONNECTING and IDLE, it queues:
 | --- | --- | --- |
 | READY | READY children | Weighted random choice, delegated to the child's picker. |
 | CONNECTING | — | Queue. |
-| IDLE | — | Queue. The picker MUST also schedule a call to the policy's `ExitIdle()`, which is forwarded to all children (see [Triggering Work From a Picker](../05-load-balancing.md#63-triggering-work-from-a-picker)), so that IDLE children are not left idle with RPCs queued. |
+| IDLE | — | Queue. The picker MUST also schedule a call to the policy's `ExitIdle()`, which is forwarded to all children (see [Triggering Work From a Picker](../06-load-balancing.md#63-triggering-work-from-a-picker)), so that IDLE children are not left idle with RPCs queued. |
 | TRANSIENT_FAILURE | TRANSIENT_FAILURE children | Weighted random choice, delegated, so that the call fails with a child's error. If there are no children, fail with `UNAVAILABLE` and a message saying that there are no children. |
 
 ```
@@ -144,20 +149,20 @@ Pick(args):
 
 The policy has one child per entry in `targets`, named by the target
 name. Each child's update contains the child's config (`childPolicy`),
-its endpoints (routed by hierarchical path; see [Update](#32-update)),
+its endpoints (routed by hierarchical path; see [Update](#33-updates-from-the-parent)),
 the resolution note, and the top-level attributes plus a
 **locality-name attribute** set to the target name. Policies below can
 use this attribute, for example as the `grpc.lb.locality` label in
 `weighted_round_robin` metrics.
 
 `ExitIdle()` and `ResetBackoff()` are forwarded to all children, and
-`Shutdown()` deletes all children ([ExitIdle](#33-exitidle),
-[ResetBackoff](#34-resetbackoff), [Shutdown](#35-shutdown)).
+`Shutdown()` deletes all children ([ExitIdle](#34-exitidle),
+[ResetBackoff](#35-resetbackoff), [Shutdown](#36-shutdown)).
 
 ### 5.2 Calls From Children
 
 The policy handles calls from its children through the
-[Helper API](../05-load-balancing.md#5-helper-api) it provides to them:
+[Helper API](../06-load-balancing.md#5-helper-api) it provides to them:
 
 - `UpdateState(state, status, picker)`: Records the child's state and
   picker, recomputes the aggregate state, and reports a new picker
@@ -188,4 +193,4 @@ The policy records no metrics.
   `weighted_target_experimental`, so that it can be selected through
   `loadBalancingConfig` in the service config and used as a child by other
   policies, including custom ones
-  ([Load Balancing](../05-load-balancing.md)).
+  ([Load Balancing](../06-load-balancing.md)).

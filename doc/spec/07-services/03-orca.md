@@ -12,9 +12,9 @@
 gRPC servers can report backend metrics, such as CPU, memory, and
 application-defined values, to clients. Client-side load balancing policies use
 them to make routing decisions. Examples are weighted round robin
-([Client-Side Backend Metrics](../04-client-channel/09-backend-metrics.md),
+([Client-Side Backend Metrics](../04-client-channel/11-backend-metrics.md),
 [weighted_round_robin](../04-client-channel/lb-policies/weighted_round_robin.md))
-and xDS load reporting ([LRS](../09-xds/09-load-reporting.md)). The data model
+and xDS load reporting ([LRS](../09-xds/10-load-reporting.md)). The data model
 and the out-of-band service come from ORCA (Open Request Cost Aggregation).
 
 There are two reporting mechanisms:
@@ -206,7 +206,7 @@ If the server does not register `OpenRcaService`, `StreamCoreMetrics` fails with
 ### 4.3 Client Behavior
 
 The client side of out-of-band reporting, and of per-request reporting, is
-specified in [Client-Side Backend Metrics](../04-client-channel/09-backend-metrics.md).
+specified in [Client-Side Backend Metrics](../04-client-channel/11-backend-metrics.md).
 In summary, the client opens one `StreamCoreMetrics` call per connection
 while at least one LB policy is watching OOB reports for that subchannel,
 requests the smallest interval any watcher asked for, never retries the
@@ -231,4 +231,4 @@ The server API MUST provide a way to:
    on a server like any other service.
 
 The client-side (LB policy) API for consuming per-request and OOB reports is
-specified in [Client-Side Backend Metrics](../04-client-channel/09-backend-metrics.md).
+specified in [Client-Side Backend Metrics](../04-client-channel/11-backend-metrics.md).

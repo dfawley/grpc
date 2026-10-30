@@ -15,13 +15,13 @@
 
 The `xds_cluster_manager` policy is the top-level policy of the LB policy
 config that the xds resolver generates (see
-[Generated service config](../04-client.md#41-generated-service-config)). It
+[Generated service config](../05-client.md#41-generated-service-config)). It
 keeps one named child per cluster or cluster specifier plugin that the
 resolver references, and routes each pick to the child selected by the xDS
 ConfigSelector for the RPC.
 
 The `xds_cluster_manager` policy is a parent policy with named children (see
-[Parents With Named Children](../../04-client-channel/05-load-balancing.md#93-parents-with-named-children)).
+[Parents With Named Children](../../04-client-channel/06-load-balancing.md#93-parents-with-named-children)).
 
 Registered name: `xds_cluster_manager_experimental`.
 
@@ -36,7 +36,7 @@ Registered name: `xds_cluster_manager_experimental`.
 │   │       └── <a href="xds_cluster_impl.md">xds_cluster_impl</a>
 │   │           └── <a href="xds_override_host.md">xds_override_host</a>
 │   │               └── <a href="../../04-client-channel/lb-policies/priority.md">priority</a>  (one child per EDS priority)
-│   │                   ├── <a href="xds_wrr_locality.md">xds_wrr_locality</a>  (default; see <a href="../05-lb-policies.md#2-xds-lb-policy-registry">xDS LB Policy Registry</a>)
+│   │                   ├── <a href="xds_wrr_locality.md">xds_wrr_locality</a>  (default; see <a href="../06-lb-policies.md#2-xds-lb-policy-registry">xDS LB Policy Registry</a>)
 │   │                   │   └── <a href="../../04-client-channel/lb-policies/weighted_target.md">weighted_target</a>  (one child per locality)
 │   │                   │       └── endpoint-picking policy (e.g. <a href="../../04-client-channel/lb-policies/round_robin.md">round_robin</a>)
 │   │                   │           └── <a href="../../04-client-channel/lb-policies/pick_first.md">pick_first</a>  (one per endpoint)
@@ -79,7 +79,7 @@ Proto: `XdsClusterManagerLoadBalancingPolicyConfig` in
 ### 2.1 Validation
 
 The whole config is invalid, and is rejected as described in
-[LB Policy Registry and Configuration](../../04-client-channel/05-load-balancing.md#2-lb-policy-registry-and-configuration),
+[LB Policy Registry and Configuration](../../04-client-channel/06-load-balancing.md#2-lb-policy-registry-and-configuration),
 if:
 
 - `children` is missing.
@@ -89,14 +89,14 @@ if:
 
 ### 2.2 Other Inputs
 
-The policy does not interpret the update's endpoints, resolution note, or
-attributes; it passes them to its children ([Update](#32-update)). The picker
-reads the cluster call attribute set by the xDS ConfigSelector
-([Picker Implementation](#4-picker-implementation)).
+| Input | Location | Default | Used for |
+| --- | --- | --- | --- |
+| Endpoints, resolution note, and attributes | Update endpoints, update resolution note, and all top-level attributes | — | Not interpreted; passed unchanged to every child ([Update](#33-updates-from-the-parent)). |
+| Cluster | Call attribute cluster, set by the xDS ConfigSelector (see [Call attributes](../05-client.md#53-call-attributes)) | — | Read by the picker to choose the child that handles the pick. If it is missing or names no active child, the pick fails with INTERNAL ([Picker Implementation](#4-picker-implementation)). |
 
 ## 3. LB Policy Implementation
 
-### 3.1 State
+### 3.1 Internal State
 
 The policy keeps a map of children keyed by child name. For each child it
 keeps:
@@ -104,19 +104,29 @@ keeps:
 - the child policy;
 - the child's most recently reported state and picker;
 - whether the child is active or deactivated, and, for a deactivated child,
-  its retention timer ([Child Deactivation and Retention](#36-child-deactivation-and-retention)).
+  its retention timer ([Child Deactivation and Retention](#child-deactivation-and-retention)).
 
 It also tracks whether an update is being passed to the children, during which
 it does not report pickers.
 
-### 3.2 Update
+### 3.2 Features
+
+#### Child Deactivation and Retention
+
+Children not in the new config are **deactivated**. A deactivated child is
+left out of the picker and of the aggregated state. It SHOULD be kept for 15
+minutes and then destroyed. If a later config names it again within that
+time, it is reactivated.
+<!-- REVIEW(divergence) [XDS_LB-3]: retention of removed children (no gRFC specifies one). Java: 15-minute deletion timer (ClusterManagerLoadBalancer.java); Go: removed immediately, caching disabled (SubBalancerCloseTimeout 0, internal/xds/balancer/clustermanager/clustermanager.go); C++: 15 minutes (kChildRetentionInterval, xds_cluster_manager.cc). spec says: SHOULD keep 15 minutes (majority). With two-phase cluster removal ([Cluster references and two-phase removal](../05-client.md#54-cluster-references-and-two-phase-removal)) a removed child can no longer be selected by any RPC, so retention only helps if the cluster comes back. Also note Java registers this policy as "cluster_manager_experimental", not "xds_cluster_manager_experimental". -->
+
+### 3.3 Updates from the Parent
 
 The policy keeps one child policy per entry in `children`, keyed by child
 name. On each update, it creates children that are new and updates the
 existing ones, passing each child the update's endpoints, resolution note,
 and attributes ([Child Policies](#51-child-policies)). Children not in the new
 config are deactivated, and deactivated children named again are reactivated
-([Child Deactivation and Retention](#36-child-deactivation-and-retention)).
+([Child Deactivation and Retention](#child-deactivation-and-retention)).
 
 While an update is being passed to the children, the policy SHOULD NOT
 report intermediate pickers. It reports one picker after all children have
@@ -126,35 +136,27 @@ been updated, with its aggregate state
 It combines the statuses returned by its children into its own returned
 status.
 
-### 3.3 ExitIdle
+### 3.4 ExitIdle
 
 Forwarded to every active child.
 
-### 3.4 ResetBackoff
+### 3.5 ResetBackoff
 
 Forwarded to every child, including deactivated children.
 
-### 3.5 Shutdown
+### 3.6 Shutdown
 
 Shuts down every child, including deactivated children, and cancels their
 retention timers.
 
-### 3.6 Child Deactivation and Retention
-
-Children not in the new config are **deactivated**. A deactivated child is
-left out of the picker and of the aggregated state. It SHOULD be kept for 15
-minutes and then destroyed. If a later config names it again within that
-time, it is reactivated.
-<!-- REVIEW(divergence) [XDS_LB-3]: retention of removed children (no gRFC specifies one). Java: 15-minute deletion timer (ClusterManagerLoadBalancer.java); Go: removed immediately, caching disabled (SubBalancerCloseTimeout 0, internal/xds/balancer/clustermanager/clustermanager.go); C++: 15 minutes (kChildRetentionInterval, xds_cluster_manager.cc). spec says: SHOULD keep 15 minutes (majority). With two-phase cluster removal ([Cluster references and two-phase removal](../04-client.md#54-cluster-references-and-two-phase-removal)) a removed child can no longer be selected by any RPC, so retention only helps if the cluster comes back. Also note Java registers this policy as "cluster_manager_experimental", not "xds_cluster_manager_experimental". -->
-
 ## 4. Picker Implementation
 
 The picker reads the cluster call attribute set by the xDS ConfigSelector
-(see [Call attributes](../04-client.md)) and delegates the pick to that child's
+(see [Call attributes](../05-client.md)) and delegates the pick to that child's
 current picker. A child that has not reported a picker yet uses a picker that
 queues. If the attribute is missing or names no active child, the pick MUST
 fail with status INTERNAL. The ordering guarantees in
-[Cluster references and two-phase removal](../04-client.md) mean that this
+[Cluster references and two-phase removal](../05-client.md) mean that this
 should never happen.
 
 ## 5. Children and Subchannels
@@ -167,13 +169,13 @@ resolution note, and attributes. Children named `cluster:<name>` run a `cds`
 policy; children named `cluster_specifier_plugin:<name>` run the policy
 produced by a cluster specifier plugin, such as
 [`rls`](../../04-client-channel/lb-policies/rls.md)
-(see [Generated service config](../04-client.md#41-generated-service-config)).
+(see [Generated service config](../05-client.md#41-generated-service-config)).
 The policy itself does not interpret child names.
 
 `ExitIdle()` is forwarded to every active child; `ResetBackoff()` and
 `Shutdown()` are forwarded to every child, including deactivated children
-([ExitIdle](#33-exitidle), [ResetBackoff](#34-resetbackoff),
-[Shutdown](#35-shutdown)).
+([ExitIdle](#34-exitidle), [ResetBackoff](#35-resetbackoff),
+[Shutdown](#36-shutdown)).
 
 ### 5.2 Calls From Children
 
@@ -184,7 +186,7 @@ The policy itself does not interpret child names.
   state and picker are not used.
 
   Connectivity state is aggregated over the active children using the standard
-  rules (see [Load Balancing](../../04-client-channel/05-load-balancing.md)):
+  rules (see [Load Balancing](../../04-client-channel/06-load-balancing.md)):
   READY if any child is READY; else CONNECTING if any is CONNECTING; else IDLE
   if any is IDLE; else TRANSIENT_FAILURE (status UNAVAILABLE).
 - `RequestReresolution()`: forwarded to the policy's own helper.
@@ -203,4 +205,4 @@ The policy records no metrics.
 ## 7. API Requirements
 
 - gRPC MUST register this policy in the LB policy registry under the name `xds_cluster_manager_experimental` so that the configuration generated by the xDS client data plane can select it.
-- This policy is internal to xDS support. Applications are not expected to configure it directly, and gRPC is not required to provide any public API specific to it beyond the general LB policy API requirements in [xDS LB Policies: API Requirements](../05-lb-policies.md#3-api-requirements).
+- This policy is internal to xDS support. Applications are not expected to configure it directly, and gRPC is not required to provide any public API specific to it beyond the general LB policy API requirements in [xDS LB Policies: API Requirements](../06-lb-policies.md#3-api-requirements).

@@ -16,7 +16,7 @@
 ## 1. Overview
 
 `random_subsetting` is a parent policy with one child (see
-[Policy Hierarchy](../05-load-balancing.md#9-policy-hierarchy)). It picks a
+[Policy Hierarchy](../06-load-balancing.md#9-policy-hierarchy)). It picks a
 subset of `subsetSize` endpoints from the endpoint list and passes only
 that subset to its child policy. Clients then connect to a bounded number
 of servers. Connections are spread across servers nearly uniformly when
@@ -43,7 +43,7 @@ Proto: `RandomSubsettingLoadBalancingConfig` in
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `subsetSize` | uint32 | Yes | — | Number of endpoints in the subset passed to the child. MUST be greater than 0. |
-| `childPolicy` | LoadBalancingConfig list | Yes | — | The child policy. Resolved as specified in [LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration). |
+| `childPolicy` | LoadBalancingConfig list | Yes | — | The child policy. Resolved as specified in [LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration). |
 
 ### 2.1 Validation
 
@@ -59,43 +59,17 @@ None.
 ## 3. LB Policy Implementation
 
 `random_subsetting` implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+[LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
 
-### 3.1 State
+### 3.1 Internal State
 
 When the policy instance is created, it generates a random integer
 `seed`, which it keeps for its whole lifetime. The policy also keeps its
 child ([Child Policies](#51-child-policies)).
 
-### 3.2 Update
+### 3.2 Features
 
-On every update (new endpoints or new config), the policy computes the
-subset ([Subset Selection](#36-subset-selection)) and sends the child an
-update. The update contains the subset, the child config, the parent's
-top-level attributes, and the resolution note.
-
-If the endpoints field is an error, the error is passed to the child in
-place of the subset. If the child's policy name changes, the child is
-replaced using the procedure in
-[Gracefully Switching LB Policies](../05-load-balancing.md#12-gracefully-switching-lb-policies).
-
-The policy reports its child's state and picker unchanged
-([Calls From Children](#52-calls-from-children)). Returns the child's
-status.
-
-### 3.3 ExitIdle
-
-Forwarded to the child.
-
-### 3.4 ResetBackoff
-
-Forwarded to the child.
-
-### 3.5 Shutdown
-
-Shuts down the child.
-
-### 3.6 Subset Selection
+#### Subset Selection
 
 ```
 filter_endpoints(endpoints, subset_size, seed):
@@ -109,6 +83,34 @@ filter_endpoints(endpoints, subset_size, seed):
 Only an endpoint's first address is hashed. `AddressString` is the
 canonical `host:port` form of the address.
 
+### 3.3 Updates from the Parent
+
+On every update (new endpoints or new config), the policy computes the
+subset ([Subset Selection](#subset-selection)) and sends the child an
+update. The update contains the subset, the child config, the parent's
+top-level attributes, and the resolution note.
+
+If the endpoints field is an error, the error is passed to the child in
+place of the subset. If the child's policy name changes, the child is
+replaced using the procedure in
+[Gracefully Switching LB Policies](../06-load-balancing.md#12-gracefully-switching-lb-policies).
+
+The policy reports its child's state and picker unchanged
+([Calls From Children](#52-calls-from-children)). Returns the child's
+status.
+
+### 3.4 ExitIdle
+
+Forwarded to the child.
+
+### 3.5 ResetBackoff
+
+Forwarded to the child.
+
+### 3.6 Shutdown
+
+Shuts down the child.
+
 ## 4. Picker Implementation
 
 Not applicable: the policy reports its child's picker unchanged.
@@ -119,10 +121,10 @@ Not applicable: the policy reports its child's picker unchanged.
 
 The policy has a single child, whose policy and config come from
 `childPolicy`. The child receives the update described in
-[Update](#32-update), and `ExitIdle()`, `ResetBackoff()`, and
+[Update](#33-updates-from-the-parent), and `ExitIdle()`, `ResetBackoff()`, and
 `Shutdown()` are passed straight through to it
-([ExitIdle](#33-exitidle), [ResetBackoff](#34-resetbackoff),
-[Shutdown](#35-shutdown)).
+([ExitIdle](#34-exitidle), [ResetBackoff](#35-resetbackoff),
+[Shutdown](#36-shutdown)).
 
 ### 5.2 Calls From Children
 
@@ -147,4 +149,4 @@ The policy records no metrics.
   `random_subsetting_experimental`, so that it can be selected through
   `loadBalancingConfig` in the service config and used as a child by other
   policies, including custom ones
-  ([Load Balancing](../05-load-balancing.md)).
+  ([Load Balancing](../06-load-balancing.md)).
