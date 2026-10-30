@@ -57,7 +57,7 @@ document shows the same tree with its own position highlighted):
 │   │               └── <a href="../04-client-channel/lb-policies/priority.md">priority</a>  (one child per EDS priority)
 │   │                   ├── <a href="lb-policies/xds_wrr_locality.md">xds_wrr_locality</a>  (default; see <a href="#2-xds-lb-policy-registry">xDS LB Policy Registry</a>)
 │   │                   │   └── <a href="../04-client-channel/lb-policies/weighted_target.md">weighted_target</a>  (one child per locality)
-│   │                   │       └── <a href="../04-client-channel/lb-policies/round_robin.md">round_robin</a> | <a href="../04-client-channel/lb-policies/weighted_round_robin.md">weighted_round_robin</a> | <a href="../04-client-channel/lb-policies/least_request.md">least_request</a>
+│   │                   │       └── endpoint-picking policy (e.g. <a href="../04-client-channel/lb-policies/round_robin.md">round_robin</a>)
 │   │                   │           └── <a href="../04-client-channel/lb-policies/pick_first.md">pick_first</a>  (one per endpoint)
 │   │                   └── or another converted policy: <a href="../04-client-channel/lb-policies/ring_hash.md">ring_hash</a> | <a href="../04-client-channel/lb-policies/random_subsetting.md">random_subsetting</a> | ...
 │   └── aggregate cluster:
