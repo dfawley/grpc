@@ -795,6 +795,7 @@ doc/server-reflection.md \
 doc/server_reflection_tutorial.md \
 doc/server_side_auth.md \
 doc/service_config.md \
+doc/spec-optionality-notes.md \
 doc/ssl-performance.md \
 doc/status_ordering.md \
 doc/statuscodes.md \
