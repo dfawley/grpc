@@ -66,7 +66,7 @@ Proto: `OverrideHostLoadBalancingPolicyConfig` in
 {
   "xds_override_host_experimental": {
     "clusterName": "cluster_a",
-    "childPolicy": [ { "round_robin": {} } ]
+    "childPolicy": [ { "child_policy_name": {} } ]
   }
 }
 ```
@@ -88,22 +88,75 @@ if:
 - `childPolicy` is missing, or is an invalid `LoadBalancingConfig` list (it
   has no supported entry, or its chosen entry is invalid).
 
-## 3. Cluster data
+### 2.2 Other Inputs
 
-The policy takes two values from the parsed cluster resource in the
-`XdsConfig`:
+- **`XdsConfig` attribute:** the policy takes two values from the parsed
+  cluster resource in the `XdsConfig`:
+  - `override_host_statuses`: the set of EDS health statuses for which the
+    session override is honored. It comes from
+    `common_lb_config.override_host_status`. Only UNKNOWN, HEALTHY, and
+    DRAINING are meaningful. The default is {UNKNOWN, HEALTHY}.
+  - `connection_idle_timeout` (called `idle_timeout` below): from the
+    cluster's `upstream_config` HTTP protocol options
+    `common_http_protocol_options.idle_timeout`, default 1 hour.
 
-- `override_host_statuses`: the set of EDS health statuses for which the
-  session override is honored. It comes from
-  `common_lb_config.override_host_status`. Only UNKNOWN, HEALTHY, and
-  DRAINING are meaningful. The default is {UNKNOWN, HEALTHY}.
-- `connection_idle_timeout` (called `idle_timeout` below): from the
-  cluster's `upstream_config` HTTP protocol options
-  `common_http_protocol_options.idle_timeout`, default 1 hour.
+  Validation of both is in [Cluster](../03-resources/04-cluster.md).
+- **Per-endpoint attributes:** each endpoint's EDS health status, and its
+  attributes as a whole, which are stored to create subchannels
+  ([Address Map](#36-address-map)).
+- **Override-host call attribute**, read by the picker
+  ([Picker Implementation](#4-picker-implementation)).
 
-Validation of both is in [Cluster](../03-resources/04-cluster.md).
+## 3. LB Policy Implementation
 
-## 4. Address map
+### 3.1 State
+
+The `xds_override_host` policy keeps:
+
+- its child policy;
+- the cluster data from the last update ([Other Inputs](#22-other-inputs));
+- the address map ([Address Map](#36-address-map)), including the
+  subchannels it owns;
+- the idle sweep timer ([Idle Sweep](#37-idle-sweep)).
+
+### 3.2 Update
+
+On each update from `cds`, the policy reads the cluster data from the
+`XdsConfig` ([Other Inputs](#22-other-inputs)) and then:
+
+1. For each endpoint in the update, and each of its addresses, the address
+   map entry ([Address Map](#36-address-map)) is created or updated with the health status, address list, and attributes.
+   Exception: an endpoint whose health status is DRAINING and is not in
+   `override_host_statuses` is left out of the map.
+2. Entries for addresses no longer present are removed. Any subchannel the
+   policy owns for them is released.
+3. The endpoint list passed to the child **always** leaves out endpoints in
+   state DRAINING, whatever `override_host_statuses` contains. DRAINING endpoints
+   receive only session traffic.
+4. The idle sweep timer is rescheduled ([Idle Sweep](#37-idle-sweep)).
+
+It passes the update to its child with that endpoint list, and with the
+resolution note and attributes unchanged. When it
+updates its child, it returns the child's status.
+
+The policy reports its child's connectivity state unchanged. It reports a new
+picker when the child does, and when it creates an owned subchannel.
+
+### 3.3 ExitIdle
+
+Forwarded to the child.
+
+### 3.4 ResetBackoff
+
+Resets the backoff of every subchannel the policy owns and forwards the
+request to the child.
+
+### 3.5 Shutdown
+
+Releases every subchannel the policy owns, cancels the idle sweep timer, and
+shuts down the child.
+
+### 3.6 Address Map
 
 The policy keeps an **address map** from address (`IP:port` string) to an
 entry with:
@@ -118,37 +171,11 @@ entry with:
 - the endpoint's per-endpoint attributes (used to create a subchannel);
 - `last_used_time`: the last time the entry was used for a session.
 
-On each update from `cds`:
+The map is updated on each update ([Update](#32-update)), when subchannels
+change owner ([Subchannels](#53-subchannels)), and by the picker
+([Picker Implementation](#4-picker-implementation)).
 
-1. For each endpoint in the update, and each of its addresses, the entry is
-   created or updated with the health status, address list, and attributes.
-   Exception: an endpoint whose health status is DRAINING and is not in
-   `override_host_statuses` is left out of the map.
-2. Entries for addresses no longer present are removed. Any subchannel the
-   policy owns for them is released.
-3. The endpoint list passed to the child **always** leaves out endpoints in
-   state DRAINING, whatever `override_host_statuses` contains. DRAINING endpoints
-   receive only session traffic.
-4. The idle sweep timer is rescheduled ([Idle sweep](#6-idle-sweep)).
-
-## 5. Subchannel ownership
-
-- When the child creates a subchannel, the policy wraps it and records it in
-  the entry for its address as child-owned. If the policy owned a subchannel
-  for that address, it releases its own one.
-- When the child releases a subchannel: if the entry's `last_used_time` is
-  within `idle_timeout` of now, the policy takes ownership of the subchannel
-  instead of letting it be destroyed. Otherwise, the subchannel is removed
-  from the entry.
-- A subchannel that the child does not own is created by the policy when the
-  picker needs it for a session ([Picker](#7-picker)). This happens, for
-  example, for an endpoint in a lower priority whose `priority` child has not
-  been created, or for a DRAINING endpoint. Such a subchannel is created with
-  the entry's per-endpoint attributes and is owned by the policy.
-- The policy tracks the connectivity state of every subchannel in the map,
-  whoever owns it.
-
-## 6. Idle sweep
+### 3.7 Idle Sweep
 
 The policy runs a timer that releases owned subchannels that have not been
 used for a session within `idle_timeout`:
@@ -168,7 +195,7 @@ The timer first runs after `idle_timeout` (or earlier, from the entries'
 `last_used_time`). Runs are at least 5 seconds apart. Child-owned subchannels
 are never released by the sweep.
 
-## 7. Picker
+## 4. Picker Implementation
 
 `last_used_time` is updated only for RPCs that carry the override-host call
 attribute, which the stateful session xDS HTTP filter sets (see
@@ -218,29 +245,54 @@ def Pick(pick_args):
 ```
 
 The map is read by pickers and written by the policy concurrently, so access
-MUST be synchronized (for example, with a reader/writer lock). The policy
-reports its child's connectivity state unchanged. It reports a new picker when
-the child does, and when it creates an owned subchannel.
+MUST be synchronized (for example, with a reader/writer lock).
 
-## 8. LB Policy API
+## 5. Children and Subchannels
 
-The `xds_override_host` policy implements the generic
-[LB Policy API](../../04-client-channel/05-load-balancing.md#4-lb-policy-api) and
-uses the [Helper API](../../04-client-channel/05-load-balancing.md#5-helper-api) as
-follows:
+### 5.1 Child Policies
 
-| Operation | Behavior |
-| --- | --- |
-| `Update(update) → status` | Reads the cluster data from the `XdsConfig` ([Cluster data](#3-cluster-data)), updates the address map, and reschedules the idle sweep ([Address map](#4-address-map)). Passes the update to its child with DRAINING endpoints removed from the endpoint list, and with the resolution note and attributes unchanged. When it updates its child, it returns the child's status. |
-| `ExitIdle()` | Forwarded to the child. |
-| `ResetBackoff()` | Resets the backoff of every subchannel the policy owns and forwards the request to the child. |
-| `Shutdown()` | Releases every subchannel the policy owns, cancels the idle sweep timer, and shuts down the child. |
-| Subchannel connectivity / health updates | The policy watches the connectivity state of every subchannel in the address map, whoever owns it, and records it in the entry for use by the picker ([Subchannel ownership](#5-subchannel-ownership), [Picker](#7-picker)). For child-owned subchannels, updates also reach the child's watchers unchanged. |
-| Child `UpdateState(state, status, picker)` | Reports the child's state and status unchanged, with a picker that wraps the child's picker and honors the override-host call attribute ([Picker](#7-picker)). |
-| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
-| Child `CreateSubchannel(address, attributes)` | Creates the subchannel through the policy's own helper, wraps it, and records it in the address map as child-owned. When the child releases the wrapper, the policy can take ownership of the subchannel ([Subchannel ownership](#5-subchannel-ownership)). |
+The policy has a single child, created from `childPolicy`. The child receives
+the update with DRAINING endpoints removed from the endpoint list, and with
+the resolution note and attributes unchanged ([Update](#32-update)).
+`ExitIdle()`, `ResetBackoff()`, and `Shutdown()` are forwarded to it
+([ExitIdle](#33-exitidle), [ResetBackoff](#34-resetbackoff),
+[Shutdown](#35-shutdown)).
 
-## 9. API Requirements
+### 5.2 Calls From Children
+
+- `UpdateState(state, status, picker)`: reports the child's state and status
+  unchanged, with a picker that wraps the child's picker and honors the
+  override-host call attribute
+  ([Picker Implementation](#4-picker-implementation)).
+- `RequestReresolution()`: forwarded to the policy's own helper.
+- `CreateSubchannel(address, attributes)`: creates the subchannel through the
+  policy's own helper, wraps it, and records it in the address map as
+  child-owned. When the child releases the wrapper, the policy can take
+  ownership of the subchannel ([Subchannels](#53-subchannels)).
+
+### 5.3 Subchannels
+
+- When the child creates a subchannel, the policy wraps it and records it in
+  the entry for its address as child-owned. If the policy owned a subchannel
+  for that address, it releases its own one.
+- When the child releases a subchannel: if the entry's `last_used_time` is
+  within `idle_timeout` of now, the policy takes ownership of the subchannel
+  instead of letting it be destroyed. Otherwise, the subchannel is removed
+  from the entry.
+- A subchannel that the child does not own is created by the policy when the
+  picker needs it for a session ([Picker Implementation](#4-picker-implementation)). This happens, for
+  example, for an endpoint in a lower priority whose `priority` child has not
+  been created, or for a DRAINING endpoint. Such a subchannel is created with
+  the entry's per-endpoint attributes and is owned by the policy.
+- The policy tracks the connectivity state of every subchannel in the map,
+  whoever owns it, and records it in the entry for use by the picker. For
+  child-owned subchannels, updates also reach the child's watchers unchanged.
+
+## 6. Metrics
+
+The policy records no metrics.
+
+## 7. API Requirements
 
 - gRPC MUST register this policy in the LB policy registry under the name `xds_override_host_experimental` so that the configuration generated by the xDS client data plane can select it.
 - This policy is internal to xDS support. Applications are not expected to configure it directly, and gRPC is not required to provide any public API specific to it beyond the general LB policy API requirements in [xDS LB Policies: API Requirements](../05-lb-policies.md#3-api-requirements).

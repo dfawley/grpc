@@ -87,16 +87,59 @@ if:
 - A child's `childPolicy` has no supported entry, or its chosen entry is
   invalid.
 
-## 3. Children
+### 2.2 Other Inputs
+
+The policy does not interpret the update's endpoints, resolution note, or
+attributes; it passes them to its children ([Update](#32-update)). The picker
+reads the cluster call attribute set by the xDS ConfigSelector
+([Picker Implementation](#4-picker-implementation)).
+
+## 3. LB Policy Implementation
+
+### 3.1 State
+
+The policy keeps a map of children keyed by child name. For each child it
+keeps:
+
+- the child policy;
+- the child's most recently reported state and picker;
+- whether the child is active or deactivated, and, for a deactivated child,
+  its retention timer ([Child Deactivation and Retention](#36-child-deactivation-and-retention)).
+
+It also tracks whether an update is being passed to the children, during which
+it does not report pickers.
+
+### 3.2 Update
 
 The policy keeps one child policy per entry in `children`, keyed by child
 name. On each update, it creates children that are new and updates the
 existing ones, passing each child the update's endpoints, resolution note,
-and attributes. Children named `cluster:<name>` run a `cds` policy; children
-named `cluster_specifier_plugin:<name>` run the policy produced by a cluster
-specifier plugin, such as [`rls`](../../04-client-channel/lb-policies/rls.md)
-(see [Generated service config](../04-client.md#41-generated-service-config)).
-The policy itself does not interpret child names.
+and attributes ([Child Policies](#51-child-policies)). Children not in the new
+config are deactivated, and deactivated children named again are reactivated
+([Child Deactivation and Retention](#36-child-deactivation-and-retention)).
+
+While an update is being passed to the children, the policy SHOULD NOT
+report intermediate pickers. It reports one picker after all children have
+been updated, with its aggregate state
+([Calls From Children](#52-calls-from-children)).
+
+It combines the statuses returned by its children into its own returned
+status.
+
+### 3.3 ExitIdle
+
+Forwarded to every active child.
+
+### 3.4 ResetBackoff
+
+Forwarded to every child, including deactivated children.
+
+### 3.5 Shutdown
+
+Shuts down every child, including deactivated children, and cancels their
+retention timers.
+
+### 3.6 Child Deactivation and Retention
 
 Children not in the new config are **deactivated**. A deactivated child is
 left out of the picker and of the aggregated state. It SHOULD be kept for 15
@@ -104,18 +147,7 @@ minutes and then destroyed. If a later config names it again within that
 time, it is reactivated.
 <!-- REVIEW(divergence) [XDS_LB-3]: retention of removed children (no gRFC specifies one). Java: 15-minute deletion timer (ClusterManagerLoadBalancer.java); Go: removed immediately, caching disabled (SubBalancerCloseTimeout 0, internal/xds/balancer/clustermanager/clustermanager.go); C++: 15 minutes (kChildRetentionInterval, xds_cluster_manager.cc). spec says: SHOULD keep 15 minutes (majority). With two-phase cluster removal ([Cluster references and two-phase removal](../04-client.md#54-cluster-references-and-two-phase-removal)) a removed child can no longer be selected by any RPC, so retention only helps if the cluster comes back. Also note Java registers this policy as "cluster_manager_experimental", not "xds_cluster_manager_experimental". -->
 
-While an update is being passed to the children, the policy SHOULD NOT
-report intermediate pickers. It reports one picker after all children have
-been updated.
-
-## 4. Connectivity state
-
-Connectivity state is aggregated over the active children using the standard
-rules (see [Load Balancing](../../04-client-channel/05-load-balancing.md)):
-READY if any child is READY; else CONNECTING if any is CONNECTING; else IDLE
-if any is IDLE; else TRANSIENT_FAILURE (status UNAVAILABLE).
-
-## 5. Picker
+## 4. Picker Implementation
 
 The picker reads the cluster call attribute set by the xDS ConfigSelector
 (see [Call attributes](../04-client.md)) and delegates the pick to that child's
@@ -125,23 +157,48 @@ fail with status INTERNAL. The ordering guarantees in
 [Cluster references and two-phase removal](../04-client.md) mean that this
 should never happen.
 
-## 6. LB Policy API
+## 5. Children and Subchannels
 
-The `xds_cluster_manager` policy implements the generic
-[LB Policy API](../../04-client-channel/05-load-balancing.md#4-lb-policy-api) and
-uses the [Helper API](../../04-client-channel/05-load-balancing.md#5-helper-api) as
-follows:
+### 5.1 Child Policies
 
-| Operation | Behavior |
-| --- | --- |
-| `Update(update) → status` | Creates, updates, deactivates, and reactivates children as described in [Children](#3-children), passing each child the update's endpoints, resolution note, and attributes, and reports one picker after all children have been updated. It combines the statuses returned by its children into its own returned status. |
-| `ExitIdle()` | Forwarded to every active child. |
-| `ResetBackoff()` | Forwarded to every child, including deactivated children. |
-| `Shutdown()` | Shuts down every child, including deactivated children, and cancels their retention timers. |
-| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its children do. |
-| Child `UpdateState(state, status, picker)` | Records the child's state and picker. If the child is active and no update is being passed to the children, the policy recomputes its aggregate state ([Connectivity state](#4-connectivity-state)) and reports it with a new picker ([Picker](#5-picker)). A deactivated child's state and picker are not used. |
-| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
-| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
+The policy has one child per entry in `children`, keyed by child name, with
+that entry's `childPolicy`. Each child receives the update's endpoints,
+resolution note, and attributes. Children named `cluster:<name>` run a `cds`
+policy; children named `cluster_specifier_plugin:<name>` run the policy
+produced by a cluster specifier plugin, such as
+[`rls`](../../04-client-channel/lb-policies/rls.md)
+(see [Generated service config](../04-client.md#41-generated-service-config)).
+The policy itself does not interpret child names.
+
+`ExitIdle()` is forwarded to every active child; `ResetBackoff()` and
+`Shutdown()` are forwarded to every child, including deactivated children
+([ExitIdle](#33-exitidle), [ResetBackoff](#34-resetbackoff),
+[Shutdown](#35-shutdown)).
+
+### 5.2 Calls From Children
+
+- `UpdateState(state, status, picker)`: records the child's state and picker.
+  If the child is active and no update is being passed to the children, the
+  policy recomputes its aggregate state and reports it with a new picker
+  ([Picker Implementation](#4-picker-implementation)). A deactivated child's
+  state and picker are not used.
+
+  Connectivity state is aggregated over the active children using the standard
+  rules (see [Load Balancing](../../04-client-channel/05-load-balancing.md)):
+  READY if any child is READY; else CONNECTING if any is CONNECTING; else IDLE
+  if any is IDLE; else TRANSIENT_FAILURE (status UNAVAILABLE).
+- `RequestReresolution()`: forwarded to the policy's own helper.
+- `CreateSubchannel(address, attributes)`: passed through to the policy's own
+  helper unchanged.
+
+### 5.3 Subchannels
+
+Not applicable: the policy does not create or watch subchannels; its children
+do.
+
+## 6. Metrics
+
+The policy records no metrics.
 
 ## 7. API Requirements
 

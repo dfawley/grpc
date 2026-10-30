@@ -87,7 +87,11 @@ when adding to or changing the specification.
 ## 4. LB Policy Documents
 
 Every LB policy document (`04-client-channel/lb-policies/*.md` and
-`09-xds/lb-policies/*.md`) uses exactly this structure, in this order:
+`09-xds/lb-policies/*.md`) uses exactly this structure. Every section is always
+present, so section numbers and anchors are the same in every LB policy
+document (for example, `#4-picker-implementation` is always the picker). A
+section that does not apply contains a single sentence saying so, e.g.
+"Not applicable: the policy has no child policies."
 
 ```
 <banner>
@@ -98,13 +102,27 @@ Every LB policy document (`04-client-channel/lb-policies/*.md` and
 
 > **Experimental:** ...            (only if the name or config is experimental)
 
+> **Introduced by:** ...           (if a gRFC introduced the policy)
+
 ## 1. Overview
 ### 1.1 Position in the xDS LB Policy Tree    (xDS policies only)
 ## 2. Configuration
 ### 2.1 Validation
-## 3. … K.  <policy-specific behavior sections>
-## K+1. LB Policy API
-## K+2. API Requirements
+### 2.2 Other Inputs
+## 3. LB Policy Implementation
+### 3.1 State
+### 3.2 Update
+### 3.3 ExitIdle
+### 3.4 ResetBackoff
+### 3.5 Shutdown
+### 3.6 … <policy algorithms>
+## 4. Picker Implementation
+## 5. Children and Subchannels
+### 5.1 Child Policies
+### 5.2 Calls From Children
+### 5.3 Subchannels
+## 6. Metrics
+## 7. API Requirements
 ```
 
 ### 4.1 Overview
@@ -129,7 +147,10 @@ Configuration always appears as section 2, in this fixed layout:
    If the config has no proto message, say so.
 2. A JSON example of the policy's complete `LoadBalancingConfig` entry (the
    object keyed by the registered name) in a `json` code block, showing every
-   field.
+   field. Where the config contains a child policy (a `LoadBalancingConfig
+   list` field), the example uses the placeholder `{ "child_policy_name": {} }`
+   rather than a real policy, unless the field always holds one specific
+   policy.
 3. A field table with exactly these columns:
 
    | Field | Type | Required | Default | Description |
@@ -147,30 +168,59 @@ Configuration always appears as section 2, in this fixed layout:
    - If the config has no fields, the table is replaced by "The config has no
      fields; it MUST be an empty JSON object."
 4. `### 2.1 Validation` lists every condition that makes the config invalid.
+5. `### 2.2 Other Inputs` lists everything else the policy reads besides its
+   JSON config: channel options, resolver and endpoint attributes, and (for
+   xDS policies) the cluster data it reads from the `XdsConfig`. If there are
+   none, it says "None."
 
-### 4.3 LB Policy API
+### 4.3 LB Policy Implementation
 
-States how the policy implements each operation of the generic LB policy API
-([Load Balancing](04-client-channel/05-load-balancing.md): LB Policy API, Helper
-API, and Subchannel Interface for LB Policies), as a table with exactly these
-rows, in this order:
+Section 3 specifies how the policy handles each call it receives from its parent
+through the generic LB policy API ([Load Balancing](04-client-channel/05-load-balancing.md):
+LB Policy API). Use pseudocode wherever it makes the behavior clearer.
 
-| Operation | Behavior |
-| --- | --- |
-| `Update(update) → status` | |
-| `ExitIdle()` | |
-| `ResetBackoff()` | |
-| `Shutdown()` | |
-| Subchannel connectivity / health updates | |
-| Child `UpdateState(state, status, picker)` | |
-| Child `RequestReresolution()` | |
-| Child `CreateSubchannel(address, attributes)` | |
+- **3.1 State:** the data the policy keeps between calls (for example, its
+  current endpoint list, children, timers, and caches).
+- **3.2 Update:** `Update(update) → status`: how the policy handles a new
+  config, endpoint list, endpoint error, and attributes; how it creates,
+  updates, or removes children and subchannels; when and how it reports its
+  connectivity state and picker; when it requests re-resolution; and the status
+  it returns.
+- **3.3 ExitIdle, 3.4 ResetBackoff, 3.5 Shutdown:** the behavior of
+  `ExitIdle()`, `ResetBackoff()`, and `Shutdown()`.
+- **3.6 and later:** the policy's algorithms and mechanisms that the
+  operations above and the picker rely on (for example, ring construction,
+  weight calculation and scheduling, ejection timers, priority selection,
+  connection attempt ordering, caches, and control-plane RPCs), one subsection
+  each, with descriptive titles.
 
-- `Update` covers config changes, endpoint lists, endpoint errors, attributes,
-  and the returned status; it summarizes and links to the detailed sections.
-- Rows that do not apply say so ("Not applicable: the policy has no child
-  policies.").
-- The picker is specified in its own policy-specific section.
+### 4.4 Picker Implementation
+
+Section 4 specifies the picker: the pick algorithm (with pseudocode), the pick
+results it returns in each case, any call-completion tracking or metric labels
+it adds, and any work it triggers in the control plane.
+
+### 4.5 Children and Subchannels
+
+Section 5 specifies how the policy relates to the policies and subchannels
+below it.
+
+- **5.1 Child Policies:** which child policies the policy creates and how they
+  are named; the config and update (endpoints and attributes) passed to each;
+  and how calls from the parent (`ExitIdle()`, `ResetBackoff()`, `Shutdown()`)
+  are forwarded to children.
+- **5.2 Calls From Children:** what the policy does when a child calls its
+  helper: `UpdateState(state, status, picker)` (including how child states are
+  aggregated), `RequestReresolution()`, and `CreateSubchannel(address,
+  attributes)` (passed through, wrapped, or given extra attributes).
+- **5.3 Subchannels:** the subchannels the policy itself creates, wraps, or
+  watches (connectivity and health watches, backend metric watches), and how it
+  reacts to their state changes.
+
+### 4.6 Metrics and API Requirements
+
+Section 6 lists the metrics the policy records, or says it records none. Section
+7 is the policy's `API Requirements` section.
 
 ## 5. Feature Origin Annotations
 

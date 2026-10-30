@@ -56,7 +56,7 @@ Proto: `OutlierDetectionLoadBalancingConfig` in
       "threshold": 85, "enforcementPercentage": 100,
       "minimumHosts": 5, "requestVolume": 50
     },
-    "childPolicy": [ { "round_robin": {} } ]
+    "childPolicy": [ { "child_policy_name": {} } ]
   }
 }
 ```
@@ -95,7 +95,16 @@ If both `successRateEjection` and `failurePercentageEjection` are unset,
 outlier detection is disabled: the policy passes everything through and
 does not count calls.
 
-## 3. State
+### 2.2 Other Inputs
+
+None.
+
+## 3. LB Policy Implementation
+
+`outlier_detection` implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+
+### 3.1 State
 
 The policy keeps two maps:
 
@@ -110,53 +119,27 @@ The policy keeps two maps:
   reference to the endpoint map entry for the endpoint that contains the
   address.
 
+The policy remembers the start time of the most recent ejection timer
+([Ejection Timer](#36-ejection-timer)).
+
+Call counts are updated from the data plane, and the endpoint map is used
+from the control plane, so access to them MUST be synchronized.
+
+### 3.2 Update
+
 Both maps are rebuilt from the endpoint list in each update. Entries for
 endpoints and addresses still present are kept. New ones are added, and
 removed ones are deleted. The subchannel map's endpoint references are
 updated if an endpoint's address set changed. The update is then passed
 to the child unchanged.
 
-Call counts are updated from the data plane, and the endpoint map is used
-from the control plane, so access to them MUST be synchronized.
+If the endpoints field is an error, the maps are left unchanged and the
+error is passed to the child. If the child's policy name changes, the
+child is replaced using the procedure in
+[Gracefully Switching LB Policies](../05-load-balancing.md#12-gracefully-switching-lb-policies).
 
-## 4. Subchannel Wrapping and Ejection
-
-The policy intercepts `CreateSubchannel()` from the child and wraps every
-subchannel it returns. If the subchannel's address is in the subchannel
-map, the wrapper is added to that entry. If the address's endpoint is
-currently ejected, the wrapper starts out ejected.
-
-The wrapper intercepts the **health state watch**. The raw connectivity
-watch passes through unchanged.
-
-- **Not ejected:** health watchers receive the underlying subchannel's
-  health state.
-- **`eject()`:** the wrapper reports TRANSIENT_FAILURE to health watchers,
-  with an `UNAVAILABLE` status saying that the endpoint was ejected by
-  outlier detection. It stops passing along underlying updates.
-- **`uneject()`:** the wrapper reports the latest underlying health state
-  and resumes passing updates along.
-
-**Eject an endpoint:** set its ejection timestamp to the sweep's
-timestamp, increase its multiplier by 1, and call `eject()` on the
-wrappers for all of its addresses.
-
-**Un-eject an endpoint:** set its ejection timestamp to null and call
-`uneject()` on the wrappers for all of its addresses.
-
-## 5. Picker and Call Counting
-
-The policy reports the child's state unchanged, with a picker that wraps
-the child's picker. When outlier detection is enabled, and the child
-returns Complete with a wrapped subchannel whose endpoint is in the
-endpoint map, the picker attaches a call tracker. When the call
-finishes, the tracker increments the success count (status `OK`) or the
-failure count (any other status) in that endpoint's active bucket.
-
-## 6. Ejection Timer
-
-The policy remembers the start time of the most recent timer. On each
-config update:
+On each config update, the policy starts, restarts, or cancels the
+ejection timer ([Ejection Timer](#36-ejection-timer)):
 
 - **If outlier detection is enabled:**
   - If there is no recorded start time, record the current time, start
@@ -166,6 +149,24 @@ config update:
 - **If outlier detection is disabled:**
   - Cancel the timer and clear the start time.
   - Un-eject all ejected endpoints, and reset every multiplier to 0.
+
+The policy reports its child's state unchanged
+([Calls From Children](#52-calls-from-children)). Returns the child's
+status.
+
+### 3.3 ExitIdle
+
+Forwarded to the child.
+
+### 3.4 ResetBackoff
+
+Forwarded to the child.
+
+### 3.5 Shutdown
+
+Cancels the ejection timer and shuts down the child.
+
+### 3.6 Ejection Timer
 
 When the timer fires, it records the current time as the new start time
 and does the following:
@@ -193,7 +194,7 @@ the percentage that would result from it is compared with
 that value: with the default of 10, nothing is ejected from a set of fewer
 than 10 endpoints.
 
-### 6.1 Success-Rate Algorithm
+#### Success-Rate Algorithm
 
 ```
 candidates = [e for e in endpoints if e.volume >= sr.request_volume]
@@ -207,7 +208,7 @@ for e in candidates:
     eject(e)
 ```
 
-### 6.2 Failure-Percentage Algorithm
+#### Failure-Percentage Algorithm
 
 ```
 candidates = [e for e in endpoints if e.volume >= fp.request_volume]
@@ -221,23 +222,68 @@ for e in candidates:
 `random_int(0, 100)` is uniform over `[0, 100)`. Endpoints that are
 already ejected are not ejected again.
 
-## 7. LB Policy API
+### 3.7 Ejecting and Un-ejecting Endpoints
 
-`outlier_detection` implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+**Eject an endpoint:** set its ejection timestamp to the sweep's
+timestamp, increase its multiplier by 1, and call `eject()` on the
+wrappers for all of its addresses ([Subchannels](#53-subchannels)).
 
-| Operation | Behavior |
-| --- | --- |
-| `Update(update) → status` | Rebuilds the endpoint and subchannel maps ([State](#3-state)), starts, restarts, or cancels the ejection timer according to the new config ([Ejection Timer](#6-ejection-timer)), and passes the update to the child unchanged. If the endpoints field is an error, the maps are left unchanged and the error is passed to the child. If the child's policy name changes, the child is replaced using the procedure in [Gracefully Switching LB Policies](../05-load-balancing.md#12-gracefully-switching-lb-policies). Returns the child's status. |
-| `ExitIdle()` | Forwarded to the child. |
-| `ResetBackoff()` | Forwarded to the child. |
-| `Shutdown()` | Cancels the ejection timer and shuts down the child. |
-| Subchannel connectivity / health updates | The policy wraps every subchannel the child creates ([Subchannel Wrapping and Ejection](#4-subchannel-wrapping-and-ejection)). Raw connectivity updates pass through the wrapper to the child unchanged. Health updates pass through unchanged while the endpoint is not ejected; while it is ejected, the wrapper reports TRANSIENT_FAILURE instead. |
-| Child `UpdateState(state, status, picker)` | Reports the child's state and status unchanged, with a picker that wraps the child's picker to count call results ([Picker and Call Counting](#5-picker-and-call-counting)). |
-| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
-| Child `CreateSubchannel(address, attributes)` | Creates the subchannel through the policy's own helper, wraps it, and adds the wrapper to the subchannel map entry for its address. The wrapper starts out ejected if the address's endpoint is currently ejected ([Subchannel Wrapping and Ejection](#4-subchannel-wrapping-and-ejection)). |
+**Un-eject an endpoint:** set its ejection timestamp to null and call
+`uneject()` on the wrappers for all of its addresses.
 
-## 8. API Requirements
+## 4. Picker Implementation
+
+The policy's picker wraps the child's picker. When outlier detection is
+enabled, and the child returns Complete with a wrapped subchannel whose
+endpoint is in the endpoint map, the picker attaches a call tracker. When
+the call finishes, the tracker increments the success count (status `OK`)
+or the failure count (any other status) in that endpoint's active bucket.
+
+## 5. Children and Subchannels
+
+### 5.1 Child Policies
+
+The policy has a single child, whose policy and config come from
+`childPolicy`. The child receives the update described in
+[Update](#32-update), and `ExitIdle()`, `ResetBackoff()`, and
+`Shutdown()` are forwarded to it as specified in
+[ExitIdle](#33-exitidle), [ResetBackoff](#34-resetbackoff), and
+[Shutdown](#35-shutdown).
+
+### 5.2 Calls From Children
+
+- **`UpdateState(state, status, picker)`:** reports the child's state and
+  status unchanged, with a picker that wraps the child's picker to count
+  call results ([Picker Implementation](#4-picker-implementation)).
+- **`RequestReresolution()`:** forwarded to the policy's own helper.
+- **`CreateSubchannel(address, attributes)`:** the policy intercepts
+  `CreateSubchannel()` from the child and wraps every subchannel it
+  returns: it creates the subchannel through the policy's own helper and
+  wraps it. If the subchannel's address is in the subchannel map, the
+  wrapper is added to that entry. If the address's endpoint is currently
+  ejected, the wrapper starts out ejected ([Subchannels](#53-subchannels)).
+
+### 5.3 Subchannels
+
+The policy does not create subchannels of its own; it wraps every
+subchannel its child creates ([Calls From Children](#52-calls-from-children)).
+
+The wrapper intercepts the **health state watch**. The raw connectivity
+watch passes through unchanged.
+
+- **Not ejected:** health watchers receive the underlying subchannel's
+  health state.
+- **`eject()`:** the wrapper reports TRANSIENT_FAILURE to health watchers,
+  with an `UNAVAILABLE` status saying that the endpoint was ejected by
+  outlier detection. It stops passing along underlying updates.
+- **`uneject()`:** the wrapper reports the latest underlying health state
+  and resumes passing updates along.
+
+## 6. Metrics
+
+The policy records no metrics.
+
+## 7. API Requirements
 
 - gRPC MUST register this policy under the name
   `outlier_detection_experimental`, so that it can be selected through

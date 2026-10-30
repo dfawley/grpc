@@ -35,8 +35,8 @@ Proto: `WeightedTargetLoadBalancingPolicyConfig` in
 {
   "weighted_target_experimental": {
     "targets": {
-      "localityA": { "weight": 3, "childPolicy": [ { "round_robin": {} } ] },
-      "localityB": { "weight": 1, "childPolicy": [ { "round_robin": {} } ] }
+      "localityA": { "weight": 3, "childPolicy": [ { "child_policy_name": {} } ] },
+      "localityB": { "weight": 1, "childPolicy": [ { "child_policy_name": {} } ] }
     }
   }
 }
@@ -59,7 +59,23 @@ if any of the following holds:
   `LoadBalancingConfig` list (no entry names a registered policy, or the
   selected policy rejects its config).
 
-## 3. Updates and Child Management
+### 2.2 Other Inputs
+
+- The hierarchical path attribute of each endpoint, used to route the
+  endpoint to a child ([Hierarchical Address Paths](../05-load-balancing.md#94-hierarchical-address-paths)).
+
+## 3. LB Policy Implementation
+
+The policy implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+
+### 3.1 State
+
+- The children, keyed by target name.
+- For each child, its latest reported connectivity state and picker
+  ([Calls From Children](#52-calls-from-children)).
+
+### 3.2 Update
 
 On each update, the policy:
 
@@ -67,16 +83,16 @@ On each update, the policy:
    the target name, removed before passing down; see
    [Hierarchical Address Paths](../05-load-balancing.md#94-hierarchical-address-paths)).
 2. For each target in the config, creates the child if needed, or
-   updates the existing child of that name. The update contains the
-   child's config, its endpoints, the resolution note, and the
-   top-level attributes plus a **locality-name attribute** set to the
-   target name. Policies below can use this attribute, for example as
-   the `grpc.lb.locality` label in `weighted_round_robin` metrics. If a
-   child's policy name changed, the graceful-switch procedure is used.
+   updates the existing child of that name, passing it the update
+   described in [Child Policies](#51-child-policies). If a child's policy
+   name changed, the graceful-switch procedure is used.
 3. Deletes children whose names are no longer in `targets` (see
    below).
 4. After all children are updated, computes and reports its aggregate
    state and picker once.
+
+If the endpoints field is an error, the error is passed to every child.
+The policy returns a status that combines the children's statuses.
 
 **Removed children.** A child whose name is no longer in `targets` is
 deleted immediately, when the update is applied. It is not retained. If a
@@ -84,14 +100,19 @@ later update adds the name back, a new child is created.
 
 <!-- REVIEW(divergence) [WEIGHTED_TARGET-1]: Java and Go delete removed children immediately (grpc-java WeightedTargetLoadBalancer shutdown, with "TODO cache removed target for 15 minutes"; grpc-go balancer/weightedtarget/weightedtarget.go SubBalancerCloseTimeout: 0, "Disable caching of removed child policies"). C++ deactivates them and deletes them after 15 minutes (src/core/load_balancing/weighted_target/weighted_target.cc DeactivateLocked, kChildRetentionInterval). gRFC A28 says "When a child policy is removed, it will be cached for 15 minutes." The spec now says immediate deletion, following the Java/Go majority. This is consistent with priority.md. -->
 
-## 4. Connectivity State
+### 3.3 ExitIdle
 
-The aggregate state is computed over all children with the normal
-rules (first match wins): READY if any child is READY; otherwise
-CONNECTING if any is CONNECTING; otherwise IDLE if any is IDLE; otherwise
-TRANSIENT_FAILURE (including when there are no children).
+Forwarded to all children.
 
-## 5. Picker
+### 3.4 ResetBackoff
+
+Forwarded to all children.
+
+### 3.5 Shutdown
+
+Deletes all children.
+
+## 4. Picker Implementation
 
 In READY and TRANSIENT_FAILURE, the picker does a weighted random choice
 among the children that are in the aggregate state, and delegates to the
@@ -117,23 +138,49 @@ Pick(args):
   return c.picker.Pick(args)
 ```
 
-## 6. LB Policy API
+## 5. Children and Subchannels
 
-The policy implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) and the
-[Helper API](../05-load-balancing.md#5-helper-api) it provides to its
-children as follows:
+### 5.1 Child Policies
 
-| Operation | Behavior |
-| --- | --- |
-| `Update(update) → status` | Creates, updates, and deletes children by target name and routes endpoints to them by hierarchical path, then reports its state and picker once ([Updates and Child Management](#3-updates-and-child-management)). Each child receives the resolution note and the top-level attributes plus the locality-name attribute. If the endpoints field is an error, the error is passed to every child. Returns a status that combines the children's statuses. |
-| `ExitIdle()` | Forwarded to all children. |
-| `ResetBackoff()` | Forwarded to all children. |
-| `Shutdown()` | Deletes all children. |
-| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its children do. |
-| Child `UpdateState(state, status, picker)` | Records the child's state and picker, recomputes the aggregate state ([Connectivity State](#4-connectivity-state)), and reports a new picker ([Picker](#5-picker)). While an update is being applied to the children, the aggregate is reported only once, after all children are updated. |
-| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
-| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
+The policy has one child per entry in `targets`, named by the target
+name. Each child's update contains the child's config (`childPolicy`),
+its endpoints (routed by hierarchical path; see [Update](#32-update)),
+the resolution note, and the top-level attributes plus a
+**locality-name attribute** set to the target name. Policies below can
+use this attribute, for example as the `grpc.lb.locality` label in
+`weighted_round_robin` metrics.
+
+`ExitIdle()` and `ResetBackoff()` are forwarded to all children, and
+`Shutdown()` deletes all children ([ExitIdle](#33-exitidle),
+[ResetBackoff](#34-resetbackoff), [Shutdown](#35-shutdown)).
+
+### 5.2 Calls From Children
+
+The policy handles calls from its children through the
+[Helper API](../05-load-balancing.md#5-helper-api) it provides to them:
+
+- `UpdateState(state, status, picker)`: Records the child's state and
+  picker, recomputes the aggregate state, and reports a new picker
+  ([Picker Implementation](#4-picker-implementation)). While an update is
+  being applied to the children, the aggregate is reported only once,
+  after all children are updated.
+
+  The aggregate state is computed over all children with the normal
+  rules (first match wins): READY if any child is READY; otherwise
+  CONNECTING if any is CONNECTING; otherwise IDLE if any is IDLE; otherwise
+  TRANSIENT_FAILURE (including when there are no children).
+- `RequestReresolution()`: Forwarded to the policy's own helper.
+- `CreateSubchannel(address, attributes)`: Passed through to the policy's
+  own helper unchanged.
+
+### 5.3 Subchannels
+
+Not applicable: the policy does not create or watch subchannels; its
+children do.
+
+## 6. Metrics
+
+The policy records no metrics.
 
 ## 7. API Requirements
 

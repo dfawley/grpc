@@ -39,7 +39,7 @@ Proto: `WeightedRoundRobinLbConfig` in `grpc/service_config/service_config.proto
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `enableOobLoadReport` | bool | No | `false` | If true, use out-of-band reports. If false, use per-call reports ([Load Report Sources](#5-load-report-sources)). |
+| `enableOobLoadReport` | bool | No | `false` | If true, use out-of-band reports. If false, use per-call reports ([Load Report Sources](#37-load-report-sources)). |
 | `oobReportingPeriod` | Duration | No | `"10s"` | Reporting interval requested from servers in OOB mode. |
 | `blackoutPeriod` | Duration | No | `"10s"` | How long an endpoint must report continuously before its weight is used. `0` disables the blackout. |
 | `weightExpirationPeriod` | Duration | No | `"180s"` | A weight not updated for this long is no longer used. |
@@ -57,7 +57,35 @@ if:
   duration format (for example, `"10s"`).
 - `errorUtilizationPenalty` is negative.
 
-## 3. Endpoint Management and Connectivity State
+### 2.2 Other Inputs
+
+Top-level attributes:
+
+- The locality-name attribute that `weighted_target` passes down, used as
+  the `grpc.lb.locality` metric label ([Metrics](#6-metrics)).
+- The backend-service resolver attribute, used as the
+  `grpc.lb.backend_service` metric label ([Metrics](#6-metrics)).
+
+## 3. LB Policy Implementation
+
+`weighted_round_robin` implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+
+### 3.1 State
+
+The policy keeps:
+
+- One `pick_first` child per endpoint, keyed by endpoint identity, with
+  the most recent state and picker reported by each child.
+- Each endpoint's weight state (`weight`, `last_updated`, and
+  `non_empty_since`; see [Endpoint Weights](#36-endpoint-weights)), keyed
+  by endpoint identity.
+- When `enableOobLoadReport` is true, the OOB backend metric watchers it
+  registered on its children's subchannels ([OOB Reports](#oob-reports)).
+- The current picker's scheduler and weight update timer
+  ([Scheduler](#38-scheduler)).
+
+### 3.2 Update
 
 Endpoint management, connectivity behavior, and state aggregation are the
 same as for [`round_robin`](round_robin.md):
@@ -69,16 +97,39 @@ same as for [`round_robin`](round_robin.md):
 - A child that reports IDLE is immediately asked to exit IDLE, and is
   counted as CONNECTING.
 - Aggregation uses sticky TRANSIENT_FAILURE.
-- An empty endpoint list causes TRANSIENT_FAILURE and the update is
-  rejected.
 - Re-resolution requests are forwarded.
 
-Each endpoint's weight state (below) is keyed by endpoint identity, so it
-is retained across updates for endpoints that remain present.
+Each endpoint's weight state ([Endpoint Weights](#36-endpoint-weights))
+is keyed by endpoint identity, so it is retained across updates for
+endpoints that remain present.
 
-## 4. Endpoint Weights
+A change to `enableOobLoadReport` or `oobReportingPeriod` is applied
+without recreating subchannels ([OOB Reports](#oob-reports)); the other
+config fields take effect when the next picker is built
+([Building the Scheduler](#building-the-scheduler)).
 
-### 4.1 Weight Formula
+An empty endpoint list, or an endpoint error with no previous list, shuts
+down all children, reports TRANSIENT_FAILURE, and returns `UNAVAILABLE`.
+An endpoint error with a previous list is ignored, and the existing
+children are kept. `Update()` returns OK in all other cases.
+
+### 3.3 ExitIdle
+
+No-op: the policy never reports IDLE, because it calls `ExitIdle()` on any
+child that reports IDLE.
+
+### 3.4 ResetBackoff
+
+Forwarded to all children.
+
+### 3.5 Shutdown
+
+Shuts down all children, stops all OOB backend metric watchers, and
+cancels the weight update timer.
+
+### 3.6 Endpoint Weights
+
+#### Weight Formula
 
 From each backend metric report, WRR takes:
 
@@ -97,7 +148,7 @@ The `eps/qps` term is applied only when both `utilization` and `qps` are
 greater than zero. A report that yields a weight of zero (for example,
 zero utilization or zero qps) is ignored.
 
-### 4.2 Blackout and Expiration
+#### Blackout and Expiration
 
 Each endpoint tracks `weight`, `last_updated`, and `non_empty_since`
 (initially infinite). The endpoint MUST be updated and read under
@@ -130,16 +181,16 @@ GetWeight():
 Blackout applies both after an endpoint (re)connects and after its
 weight expires.
 
-## 5. Load Report Sources
+### 3.7 Load Report Sources
 
-### 5.1 Per-Call Reports (Default)
+#### Per-Call Reports (Default)
 
 When `enableOobLoadReport` is false, the picker attaches a call tracker
 to each Complete result. When the call finishes, the tracker passes the
 call's backend metric report, if any, to `OnReport()` for the picked
 endpoint. A missing report is ignored.
 
-### 5.2 OOB Reports
+#### OOB Reports
 
 When `enableOobLoadReport` is true:
 
@@ -160,14 +211,9 @@ attach or omit per-call trackers. When `oobReportingPeriod` changes, WRR
 MUST update the watchers' interval. Neither change may recreate
 subchannels or drop connections.
 
-## 6. Picker and Scheduler
+### 3.8 Scheduler
 
-The READY picker holds the list of READY children and an **earliest
-deadline first (EDF)** scheduler. Only READY children are in the
-scheduler. Each pick asks the scheduler for an index and delegates to
-that child's picker.
-
-### 6.1 Building the Scheduler
+#### Building the Scheduler
 
 ```
 BuildScheduler(ready_children):
@@ -193,7 +239,7 @@ The scheduler is rebuilt:
 A scheduler MUST be cheap to build and allow concurrent picks with little
 or no contention.
 
-### 6.2 EDF Scheduling
+#### EDF Scheduling
 
 Each entry `i` has period `1 / weights[i]` and a deadline. The initial
 deadline is chosen uniformly at random in `[0, period]`, so that
@@ -217,7 +263,59 @@ Any implementation that gives the same long-run selection proportions
 (each READY endpoint chosen in proportion to its weight), with
 comparable smoothness, is conformant.
 
-## 7. Metrics
+## 4. Picker Implementation
+
+The READY picker holds the list of READY children and an **earliest
+deadline first (EDF)** scheduler ([Scheduler](#38-scheduler)). Only READY
+children are in the scheduler. Each pick asks the scheduler for an index
+and delegates to that child's picker. When `enableOobLoadReport` is false,
+the picker attaches a call tracker to each Complete result
+([Per-Call Reports (Default)](#per-call-reports-default)).
+
+## 5. Children and Subchannels
+
+### 5.1 Child Policies
+
+WRR creates one `pick_first` child per endpoint, with the child's
+internal health-reporting option enabled, as [`round_robin`](round_robin.md)
+does ([Update](#32-update)). Each child receives its endpoint with that
+endpoint's attributes, plus the resolution note and the top-level
+attributes.
+
+- `ExitIdle()`: not forwarded (it is a no-op), but WRR calls a child's
+  `ExitIdle()` whenever that child reports IDLE.
+- `ResetBackoff()`: forwarded to all children.
+- `Shutdown()`: shuts down all children.
+
+### 5.2 Calls From Children
+
+`weighted_round_robin` implements the
+[Helper API](../05-load-balancing.md#5-helper-api) it provides to its
+children as follows:
+
+- `UpdateState(state, status, picker)`: Records the child's state and
+  picker. If the state is IDLE, calls the child's `ExitIdle()`. If the
+  state is READY, calls `OnEndpointBecomesReady()` for the endpoint
+  ([Blackout and Expiration](#blackout-and-expiration)). Recomputes the
+  aggregate state as for `round_robin` and reports a new picker with a
+  newly built scheduler ([Picker Implementation](#4-picker-implementation)).
+  While an update is being applied to the children, the aggregate is
+  reported only once, after all children are updated.
+- `RequestReresolution()`: Forwarded to the policy's own helper.
+- `CreateSubchannel(address, attributes)`: Passed through to the policy's
+  own helper. When `enableOobLoadReport` is true, the policy registers an
+  OOB backend metric watcher on the returned subchannel
+  ([OOB Reports](#oob-reports)).
+
+### 5.3 Subchannels
+
+The policy does not watch subchannel connectivity or health; its
+`pick_first` children do. When `enableOobLoadReport` is true, the policy
+receives OOB backend metric reports from the watchers it registers on its
+children's subchannels and passes them to `OnReport()` for the endpoint
+([OOB Reports](#oob-reports)).
+
+## 6. Metrics
 
 > **Experimental:** The WRR metrics below are experimental (off by
 > default).
@@ -238,25 +336,7 @@ resolver attribute, empty if unset). Definitions are in
 | `grpc.lb.wrr.endpoint_weight_stale` | Counter | `{endpoint}` | Endpoints in this update whose latest weight is older than the expiration period. |
 | `grpc.lb.wrr.endpoint_weights` | Histogram | `{weight}` | Weight of each endpoint in this update (0 if not usable). |
 
-## 8. LB Policy API
-
-`weighted_round_robin` implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) and the
-[Helper API](../05-load-balancing.md#5-helper-api) it provides to its
-children as follows:
-
-| Operation | Behavior |
-| --- | --- |
-| `Update(update) → status` | Manages `pick_first` children as [`round_robin`](round_robin.md) does ([Endpoint Management and Connectivity State](#3-endpoint-management-and-connectivity-state)), retaining each endpoint's weight state by endpoint identity. Each child receives its endpoint with that endpoint's attributes, plus the resolution note and the top-level attributes. A change to `enableOobLoadReport` or `oobReportingPeriod` is applied without recreating subchannels ([OOB Reports](#52-oob-reports)); the other config fields take effect when the next picker is built ([Building the Scheduler](#61-building-the-scheduler)). The locality-name and backend-service top-level attributes are used as metric labels ([Metrics](#7-metrics)). An empty endpoint list, or an endpoint error with no previous list, shuts down all children, reports TRANSIENT_FAILURE, and returns `UNAVAILABLE`. An endpoint error with a previous list is ignored, and the existing children are kept. Returns OK in all other cases. |
-| `ExitIdle()` | No-op: the policy never reports IDLE, because it calls `ExitIdle()` on any child that reports IDLE. |
-| `ResetBackoff()` | Forwarded to all children. |
-| `Shutdown()` | Shuts down all children, stops all OOB backend metric watchers, and cancels the weight update timer. |
-| Subchannel connectivity / health updates | The policy does not watch subchannel connectivity or health; its `pick_first` children do. When `enableOobLoadReport` is true, the policy receives OOB backend metric reports from the watchers it registers on its children's subchannels and passes them to `OnReport()` for the endpoint ([OOB Reports](#52-oob-reports)). |
-| Child `UpdateState(state, status, picker)` | Records the child's state and picker. If the state is IDLE, calls the child's `ExitIdle()`. If the state is READY, calls `OnEndpointBecomesReady()` for the endpoint ([Blackout and Expiration](#42-blackout-and-expiration)). Recomputes the aggregate state as for `round_robin` and reports a new picker with a newly built scheduler ([Picker and Scheduler](#6-picker-and-scheduler)). While an update is being applied to the children, the aggregate is reported only once, after all children are updated. |
-| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
-| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper. When `enableOobLoadReport` is true, the policy registers an OOB backend metric watcher on the returned subchannel ([OOB Reports](#52-oob-reports)). |
-
-## 9. API Requirements
+## 7. API Requirements
 
 - gRPC MUST register this policy under the name `weighted_round_robin`, so
   that it can be selected through `loadBalancingConfig` in the service

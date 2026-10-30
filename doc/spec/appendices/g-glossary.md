@@ -85,7 +85,7 @@ See [XdsClient](../09-xds/02-xds-client.md) ([XdsClient: Resource Names](../09-x
 chosen by xDS (`auto_host_rewrite`). It is honored only for routes from
 xDS servers marked `trusted_xds_server`. See
 [Client Data Plane](../09-xds/04-client.md) ([Authority rewriting](../09-xds/04-client.md#59-authority-rewriting)) and
-[xDS LB Policies](../09-xds/05-lb-policies.md) ([Authority rewriting](../09-xds/lb-policies/xds_cluster_impl.md#8-authority-rewriting)).
+[xDS LB Policies](../09-xds/05-lb-policies.md) ([Authority rewriting](../09-xds/lb-policies/xds_cluster_impl.md#39-authority-rewriting)).
 
 **Authorization policy (gRPC authorization policy)** — A JSON policy of
 allow and deny rules, evaluated on the server for each RPC by the RBAC

@@ -242,7 +242,7 @@ be added in the future.
 
 These metrics are recorded by the [`rls`](../04-client-channel/lb-policies/rls.md)
 policy. Label values are defined in
-[`rls`: Metrics](../04-client-channel/lb-policies/rls.md#11-metrics).
+[`rls`: Metrics](../04-client-channel/lb-policies/rls.md#6-metrics).
 
 | Name | Type | Unit | Required labels | Optional labels | Description |
 | --- | --- | --- | --- | --- | --- |

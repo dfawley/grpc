@@ -33,8 +33,8 @@ Proto: `PriorityLoadBalancingPolicyConfig` in
 {
   "priority_experimental": {
     "children": {
-      "child0": { "config": [ { "round_robin": {} } ], "ignoreReresolutionRequests": false },
-      "child1": { "config": [ { "round_robin": {} } ], "ignoreReresolutionRequests": true }
+      "child0": { "config": [ { "child_policy_name": {} } ], "ignoreReresolutionRequests": false },
+      "child1": { "config": [ { "child_policy_name": {} } ], "ignoreReresolutionRequests": true }
     },
     "priorities": [ "child0", "child1" ]
   }
@@ -59,9 +59,65 @@ The config is invalid if any of the following holds:
 - A key of `children` does not appear in `priorities`.
 
 An empty `priorities` list (with an empty `children` map) is valid (see
-[Priority Selection Algorithm](#7-priority-selection-algorithm)).
+[Priority Selection Algorithm](#39-priority-selection-algorithm)).
 
-## 3. Endpoint Distribution
+### 2.2 Other Inputs
+
+Each endpoint's hierarchical path, which selects the child that receives
+the endpoint ([Endpoint Distribution](#36-endpoint-distribution)).
+
+## 3. LB Policy Implementation
+
+`priority` implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+
+### 3.1 State
+
+For each child, the policy stores the most recent connectivity state,
+status, and picker. Children start in CONNECTING (see
+[Initial State](../05-load-balancing.md#43-initial-state)). Each child
+also has a failover timer ([Failover Timer](#37-failover-timer)) and, while
+deactivated, a deletion timer ([Child Lifetime](#38-child-lifetime)).
+
+The policy also tracks the **current priority**
+([Priority Selection Algorithm](#39-priority-selection-algorithm)).
+
+### 3.2 Update
+
+When the policy receives an update:
+
+1. Delete (or deactivate, as permitted by
+   [Child Lifetime](#38-child-lifetime)) every child whose name is not in
+   the new `priorities`.
+2. For every remaining existing child, send an update with its new
+   config and endpoint subset ([Endpoint Distribution](#36-endpoint-distribution)).
+   If the child's policy name changed, use the graceful-switch procedure
+   (see
+   [Gracefully Switching LB Policies](../05-load-balancing.md#12-gracefully-switching-lb-policies)).
+3. While applying steps 1–2, ignore picker updates from children for the
+   purpose of choosing a priority (but still record them).
+4. Run the priority-selection algorithm once
+   ([Priority Selection Algorithm](#39-priority-selection-algorithm)).
+
+If the endpoints field is an error, the error is passed to each child in
+place of its endpoint subset.
+
+The policy returns a non-OK status from the update if any child rejected
+its update, and OK otherwise.
+
+### 3.3 ExitIdle
+
+Forwarded to the current priority's child.
+
+### 3.4 ResetBackoff
+
+Forwarded to all children.
+
+### 3.5 Shutdown
+
+Deletes all children and cancels all timers.
+
+### 3.6 Endpoint Distribution
 
 Endpoints are sent to children by hierarchical path: an endpoint goes to
 the child named by the first element of its path, with that element
@@ -70,11 +126,7 @@ removed (see
 Each child's update contains its subset of endpoints, its config, the
 top-level attributes, and the resolution note.
 
-## 4. Child State Tracking and Failover Timer
-
-For each child, the policy stores the most recent connectivity state,
-status, and picker. Children start in CONNECTING (see
-[Initial State](../05-load-balancing.md#43-initial-state)).
+### 3.7 Failover Timer
 
 Each child has a **failover timer** of **10 seconds**. While it runs, the
 child is considered to still be trying to connect.
@@ -85,9 +137,9 @@ child is considered to still be trying to connect.
   IDLE rather than TRANSIENT_FAILURE.
 - **Cancelled** when the child reports READY, IDLE, or TRANSIENT_FAILURE.
 - **On expiry**, the policy runs the priority-selection algorithm
-  ([Priority Selection Algorithm](#7-priority-selection-algorithm)).
+  ([Priority Selection Algorithm](#39-priority-selection-algorithm)).
 
-## 5. Child Lifetime
+### 3.8 Child Lifetime
 
 - **Lazy creation.** A child is created only when the selection algorithm
   reaches its priority. When a priority is chosen, lower-priority children
@@ -105,30 +157,12 @@ child is considered to still be trying to connect.
   up to 15 minutes as above. A retained child receives no picks and is
   reactivated if its name returns to `priorities` before it is deleted.
 
-## 6. Configuration Updates
-
-When the policy receives an update:
-
-1. Delete (or deactivate, as permitted by
-   [Child Lifetime](#5-child-lifetime)) every child whose name is not in
-   the new `priorities`.
-2. For every remaining existing child, send an update with its new
-   config and endpoint subset. If the child's policy name changed, use
-   the graceful-switch procedure (see
-   [Gracefully Switching LB Policies](../05-load-balancing.md#12-gracefully-switching-lb-policies)).
-3. While applying steps 1–2, ignore picker updates from children for the
-   purpose of choosing a priority (but still record them).
-4. Run the priority-selection algorithm once.
-
-The policy returns a non-OK status from the update if any child rejected
-its update.
-
-## 7. Priority Selection Algorithm
+### 3.9 Priority Selection Algorithm
 
 The algorithm is idempotent: running it again with the same child states
 gives the same result. It runs after each config update and after each
-child state report (except during step 3 above), and when a failover timer
-fires.
+child state report (except during step 3 of [Update](#32-update)), and
+when a failover timer fires.
 
 ```python
 def SetCurrentPriority(self, priority, deactivate_lower_priorities):
@@ -175,23 +209,48 @@ The child chosen by the last `SetCurrentPriority()` call is the
 status, and picker. When the current child later reports a new picker
 without changing the selection, the policy passes it through.
 
-## 8. LB Policy API
+## 4. Picker Implementation
 
-`priority` implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+Not applicable: the policy reports the current priority's picker
+unchanged, or, with an empty `priorities` list, a picker that fails calls
+([Priority Selection Algorithm](#39-priority-selection-algorithm)).
 
-| Operation | Behavior |
-| --- | --- |
-| `Update(update) → status` | Deletes or deactivates removed children, updates the remaining children with their new configs and endpoint subsets, and runs the priority-selection algorithm once ([Configuration Updates](#6-configuration-updates), [Endpoint Distribution](#3-endpoint-distribution)). If the endpoints field is an error, the error is passed to each child in place of its endpoint subset. Returns a non-OK status if any child rejected its update, and OK otherwise. |
-| `ExitIdle()` | Forwarded to the current priority's child. |
-| `ResetBackoff()` | Forwarded to all children. |
-| `Shutdown()` | Deletes all children and cancels all timers. |
-| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its children do. |
-| Child `UpdateState(state, status, picker)` | Records the child's state, status, and picker, starts or cancels the child's failover timer ([Child State Tracking and Failover Timer](#4-child-state-tracking-and-failover-timer)), and runs the priority-selection algorithm, except while applying an update ([Priority Selection Algorithm](#7-priority-selection-algorithm)). The policy reports the current priority's state, status, and picker. |
-| Child `RequestReresolution()` | Forwarded to the policy's own helper, unless that child's `ignoreReresolutionRequests` is true, in which case it is ignored. |
-| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
+## 5. Children and Subchannels
 
-## 9. API Requirements
+### 5.1 Child Policies
+
+The policy creates one child per name in `priorities`, lazily
+([Child Lifetime](#38-child-lifetime)), using the policy in that name's
+`children{}.config`. Each child's update is described in
+[Endpoint Distribution](#36-endpoint-distribution). `ExitIdle()`,
+`ResetBackoff()`, and `Shutdown()` are forwarded as specified in
+[ExitIdle](#33-exitidle), [ResetBackoff](#34-resetbackoff), and
+[Shutdown](#35-shutdown).
+
+### 5.2 Calls From Children
+
+- **`UpdateState(state, status, picker)`:** records the child's state,
+  status, and picker, starts or cancels the child's failover timer
+  ([Failover Timer](#37-failover-timer)), and runs the priority-selection
+  algorithm, except while applying an update
+  ([Priority Selection Algorithm](#39-priority-selection-algorithm)). The
+  policy reports the current priority's state, status, and picker.
+- **`RequestReresolution()`:** forwarded to the policy's own helper,
+  unless that child's `ignoreReresolutionRequests` is true, in which case
+  it is ignored.
+- **`CreateSubchannel(address, attributes)`:** passed through to the
+  policy's own helper unchanged.
+
+### 5.3 Subchannels
+
+Not applicable: the policy does not create or watch subchannels; its
+children do.
+
+## 6. Metrics
+
+The policy records no metrics.
+
+## 7. API Requirements
 
 - gRPC MUST register this policy under the name `priority_experimental`,
   so that it can be selected through `loadBalancingConfig` in the service

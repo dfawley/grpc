@@ -50,9 +50,9 @@ Proto: `RingHashLoadBalancingConfig` in
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `minRingSize` | uint64 | No | 1024 | Minimum ring size ([Ring Construction](#6-ring-construction)). MUST be in `[1, 8388608]`. |
-| `maxRingSize` | uint64 | No | 4096 | Maximum ring size ([Ring Construction](#6-ring-construction)). MUST be in `[1, 8388608]`. |
-| `requestHashHeader` | string | No | `""` | Request header whose value is hashed to compute the request hash ([Picker](#7-picker)). If empty, the request hash is taken from the call attribute set by the ConfigSelector. If non-empty, MUST be a valid header name, and MUST NOT end in `-bin`. |
+| `minRingSize` | uint64 | No | 1024 | Minimum ring size ([Ring Construction](#36-ring-construction)). MUST be in `[1, 8388608]`. |
+| `maxRingSize` | uint64 | No | 4096 | Maximum ring size ([Ring Construction](#36-ring-construction)). MUST be in `[1, 8388608]`. |
+| `requestHashHeader` | string | No | `""` | Request header whose value is hashed to compute the request hash ([Picker Implementation](#4-picker-implementation)). If empty, the request hash is taken from the call attribute set by the ConfigSelector. If non-empty, MUST be a valid header name, and MUST NOT end in `-bin`. |
 
 ### 2.1 Validation
 
@@ -64,10 +64,12 @@ Any violation makes the config invalid (see
 [LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration)).
 An explicit value of 0 is invalid; it does not mean "use the default".
 These checks MUST be applied to the values as configured, before the
-local [Ring Size Cap](#3-ring-size-cap), so that every client accepts or
+local [Ring Size Cap](#ring-size-cap), so that every client accepts or
 rejects the same configs.
 
-## 3. Ring Size Cap
+### 2.2 Other Inputs
+
+#### Ring Size Cap
 
 The client has a local cap on ring size, settable through a channel
 option, with a default of 4096. If `minRingSize` or `maxRingSize` is
@@ -76,7 +78,7 @@ configured through xDS and the xDS resource does not set a maximum, the
 xDS layer sets `maxRingSize` to 8388608, so the effective maximum is the
 local cap (see [xDS LB Policies](../../09-xds/05-lb-policies.md)).
 
-## 4. Endpoint Attributes
+#### Endpoint Attributes
 
 | Attribute | Default | Use |
 | --- | --- | --- |
@@ -86,7 +88,24 @@ local cap (see [xDS LB Policies](../../09-xds/05-lb-policies.md)).
 If several endpoints share a `hash_key`, the endpoint chosen among them
 for a given ring position is unspecified.
 
-## 5. Updates and Endpoint Management
+## 3. LB Policy Implementation
+
+`ring_hash` implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+
+### 3.1 State
+
+The policy keeps:
+
+- An **endpoint map**, keyed by endpoint identity (see
+  [Update](#32-update)). Each entry holds the endpoint's weight and
+  `hash_key`, its `pick_first` child if one has been created
+  ([Child Policies](#51-child-policies)), and the endpoint's current state
+  and picker as last reported by that child (IDLE for an endpoint without
+  a child).
+- The **ring** ([Ring Construction](#36-ring-construction)).
+
+### 3.2 Update
 
 Endpoints are identified by the unordered set of their addresses,
 ignoring attributes. If the update contains several endpoints with the
@@ -101,26 +120,43 @@ On each update with a non-empty endpoint list, `ring_hash`:
      and the child gets the endpoint's current address order.
    - New endpoints start with no child.
    - Removed endpoints' children are shut down.
-2. Rebuilds the ring ([Ring Construction](#6-ring-construction)). An
-   endpoint's ring positions change when its `hash_key`, its first
-   address, or its weight changes.
-3. Applies the proactive connection rule ([Proactive Connection Attempts](#8-proactive-connection-attempts)).
-4. Reports its aggregate state and a new picker.
+2. Rebuilds the ring from the endpoints and the (capped) ring sizes
+   ([Ring Construction](#36-ring-construction)). An endpoint's ring
+   positions change when its `hash_key`, its first address, or its weight
+   changes.
+3. Applies the proactive connection rule ([Proactive Connection Attempts](#38-proactive-connection-attempts)).
+4. Reports its aggregate state
+   ([Connectivity State Aggregation](#37-connectivity-state-aggregation))
+   and a new picker.
 
-`pick_first` children are created **lazily**: a child is created only
-when the policy wants to connect to that endpoint. Each child gets just
-its endpoint, with health reporting enabled. An endpoint without a child
-is treated as IDLE.
+It then returns OK.
 
 An empty endpoint list, or an endpoint error with no previous list,
 causes TRANSIENT_FAILURE and a rejected update (`UNAVAILABLE`, including
-the resolution note).
+the resolution note). An endpoint error when a previous list exists is
+handled per [Endpoint Errors](../05-load-balancing.md#42-endpoint-errors):
+the policy keeps using its previous endpoints.
 
 `ring_hash` MUST produce a new picker every time any endpoint's state
 changes, because the picker holds the ring together with the state of
-every endpoint.
+every endpoint (see [Calls From Children](#52-calls-from-children)).
 
-## 6. Ring Construction
+### 3.3 ExitIdle
+
+No effect: connections are started by picks
+([Picker Implementation](#4-picker-implementation)) and by the proactive
+connection rule
+([Proactive Connection Attempts](#38-proactive-connection-attempts)).
+
+### 3.4 ResetBackoff
+
+Forwarded to every existing `pick_first` child.
+
+### 3.5 Shutdown
+
+Shuts down every `pick_first` child.
+
+### 3.6 Ring Construction
 
 The ring is a list of `(hash, endpoint)` entries sorted by hash. Hashes
 are computed with XXH64 (xxHash, 64-bit) with seed 0. The ring is built
@@ -157,7 +193,58 @@ of entries, capped at `max_ring_size`.
 `FindIndexForHash(h)` returns the index of the first entry whose hash is
 greater than or equal to `h`, or 0 if there is none (the ring wraps).
 
-## 7. Picker
+### 3.7 Connectivity State Aggregation
+
+Endpoint states are the states reported by the `pick_first` children
+(IDLE for endpoints without a child). `pick_first` already keeps a failed
+endpoint in TRANSIENT_FAILURE until it connects. A child that loses a
+READY connection reports IDLE. The aggregate state is (first match
+wins):
+
+1. If at least one endpoint is READY, report READY.
+2. If two or more endpoints are TRANSIENT_FAILURE, report
+   TRANSIENT_FAILURE.
+3. If at least one endpoint is CONNECTING, report CONNECTING.
+4. If exactly one endpoint is TRANSIENT_FAILURE and there is more than one
+   endpoint, report CONNECTING.
+5. If at least one endpoint is IDLE, report IDLE.
+6. Otherwise, report TRANSIENT_FAILURE.
+
+With an entirely new set of endpoints (all IDLE), `ring_hash` reports
+IDLE. The `priority` policy restarts its failover timer when such a
+child later reports CONNECTING (see
+[`priority` LB Policy](priority.md#37-failover-timer)).
+
+### 3.8 Proactive Connection Attempts
+
+When `ring_hash` is a child of `priority`, it may get no picks while it
+reports TRANSIENT_FAILURE or CONNECTING. To make sure it recovers, after
+every endpoint state change and every update, the policy applies this
+rule:
+
+> If the aggregated state is TRANSIENT_FAILURE or CONNECTING, and no
+> endpoint is CONNECTING, trigger a connection on one IDLE endpoint, if
+> there is one.
+
+Which IDLE endpoint is chosen is up to the implementation. For example:
+
+```
+if aggregated_state in (TRANSIENT_FAILURE, CONNECTING):
+  first_idle = None
+  for e in endpoints:
+    if e.state == CONNECTING: first_idle = None; break
+    if first_idle is None and e.state == IDLE: first_idle = e
+  if first_idle is not None: trigger connection on first_idle
+```
+
+"Trigger a connection" has the same meaning as in the picker
+([Picker Implementation](#4-picker-implementation)).
+
+`pick_first` children retry forever once they have failed (sticky
+TRANSIENT_FAILURE), so the number of endpoints trying to connect grows
+by one each time an attempt fails, until one connects.
+
+## 4. Picker Implementation
 
 The picker holds the ring, each endpoint's current state, and each
 endpoint child's picker. It also stores
@@ -217,75 +304,48 @@ connection error.
 Multi-valued headers are joined with `,` before hashing. With random
 hashing, a single call causes at most two endpoints to leave IDLE.
 
-## 8. Proactive Connection Attempts
+## 5. Children and Subchannels
 
-When `ring_hash` is a child of `priority`, it may get no picks while it
-reports TRANSIENT_FAILURE or CONNECTING. To make sure it recovers, after
-every endpoint state change and every update, the policy applies this
-rule:
+### 5.1 Child Policies
 
-> If the aggregated state is TRANSIENT_FAILURE or CONNECTING, and no
-> endpoint is CONNECTING, trigger a connection on one IDLE endpoint, if
-> there is one.
+The policy has one `pick_first` child per endpoint. `pick_first` children
+are created **lazily**: a child is created only when the policy wants to
+connect to that endpoint. Each child gets just its endpoint, with health
+reporting enabled. An endpoint without a child is treated as IDLE.
 
-Which IDLE endpoint is chosen is up to the implementation. For example:
+Children are created by the picker or the proactive connection rule
+("trigger a connection", [Picker Implementation](#4-picker-implementation)),
+updated or shut down by [Update](#32-update), and receive
+`ResetBackoff()` and `Shutdown()` as specified in
+[ResetBackoff](#34-resetbackoff) and [Shutdown](#35-shutdown).
+`ExitIdle()` is not forwarded ([ExitIdle](#33-exitidle)).
 
-```
-if aggregated_state in (TRANSIENT_FAILURE, CONNECTING):
-  first_idle = None
-  for e in endpoints:
-    if e.state == CONNECTING: first_idle = None; break
-    if first_idle is None and e.state == IDLE: first_idle = e
-  if first_idle is not None: trigger connection on first_idle
-```
+### 5.2 Calls From Children
 
-`pick_first` children retry forever once they have failed (sticky
-TRANSIENT_FAILURE), so the number of endpoints trying to connect grows
-by one each time an attempt fails, until one connects.
+- **`UpdateState(state, status, picker)`:** records the state and picker
+  as the state of that child's endpoint, recomputes the aggregate state
+  ([Connectivity State Aggregation](#37-connectivity-state-aggregation)),
+  applies the proactive connection rule
+  ([Proactive Connection Attempts](#38-proactive-connection-attempts)),
+  and reports the aggregate state with a new picker.
+- **`RequestReresolution()`:** forwarded to the policy's own helper.
+- **`CreateSubchannel(address, attributes)`:** passed through to the
+  policy's own helper unchanged.
 
-## 9. Connectivity State
+### 5.3 Subchannels
 
-Endpoint states are the states reported by the `pick_first` children
-(IDLE for endpoints without a child). `pick_first` already keeps a failed
-endpoint in TRANSIENT_FAILURE until it connects. A child that loses a
-READY connection reports IDLE. The aggregate state is (first match
-wins):
+Not applicable: the policy does not create or watch subchannels; its
+`pick_first` children do.
 
-1. If at least one endpoint is READY, report READY.
-2. If two or more endpoints are TRANSIENT_FAILURE, report
-   TRANSIENT_FAILURE.
-3. If at least one endpoint is CONNECTING, report CONNECTING.
-4. If exactly one endpoint is TRANSIENT_FAILURE and there is more than one
-   endpoint, report CONNECTING.
-5. If at least one endpoint is IDLE, report IDLE.
-6. Otherwise, report TRANSIENT_FAILURE.
+## 6. Metrics
 
-With an entirely new set of endpoints (all IDLE), `ring_hash` reports
-IDLE. The `priority` policy restarts its failover timer when such a
-child later reports CONNECTING (see
-[`priority` LB Policy](priority.md#4-child-state-tracking-and-failover-timer)).
+The policy records no metrics.
 
-## 10. LB Policy API
-
-`ring_hash` implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
-
-| Operation | Behavior |
-| --- | --- |
-| `Update(update) → status` | Updates the endpoint map, rebuilds the ring from the endpoints and the (capped) ring sizes, applies the proactive connection rule, and reports its aggregate state and a new picker ([Updates and Endpoint Management](#5-updates-and-endpoint-management)). An empty endpoint list, or an endpoint error with no previous list, causes TRANSIENT_FAILURE and returns `UNAVAILABLE`, including the resolution note. An endpoint error when a previous list exists is handled per [Endpoint Errors](../05-load-balancing.md#42-endpoint-errors): the policy keeps using its previous endpoints. Otherwise returns OK. |
-| `ExitIdle()` | No effect: connections are started by picks ([Picker](#7-picker)) and by the proactive connection rule ([Proactive Connection Attempts](#8-proactive-connection-attempts)). |
-| `ResetBackoff()` | Forwarded to every existing `pick_first` child. |
-| `Shutdown()` | Shuts down every `pick_first` child. |
-| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its `pick_first` children do. |
-| Child `UpdateState(state, status, picker)` | Records the state and picker as the state of that child's endpoint, recomputes the aggregate state ([Connectivity State](#9-connectivity-state)), applies the proactive connection rule, and reports the aggregate state with a new picker. A new picker is produced on every endpoint state change. |
-| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
-| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
-
-## 11. API Requirements
+## 7. API Requirements
 
 - gRPC MUST register this policy under the name `ring_hash_experimental`,
   so that it can be selected through `loadBalancingConfig` in the service
   config and used as a child by other policies, including custom ones
   ([Load Balancing](../05-load-balancing.md)).
 - The channel API MUST provide a way to set the local ring size cap
-  (default 4096) ([Ring Size Cap](#3-ring-size-cap)).
+  (default 4096) ([Ring Size Cap](#ring-size-cap)).

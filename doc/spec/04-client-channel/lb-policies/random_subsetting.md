@@ -35,7 +35,7 @@ Proto: `RandomSubsettingLoadBalancingConfig` in
 {
   "random_subsetting_experimental": {
     "subsetSize": 10,
-    "childPolicy": [ { "round_robin": {} } ]
+    "childPolicy": [ { "child_policy_name": {} } ]
   }
 }
 ```
@@ -52,15 +52,50 @@ The config is invalid if any of the following holds:
 - `subsetSize` is missing or 0.
 - `childPolicy` is missing or invalid.
 
-## 3. Behavior
+### 2.2 Other Inputs
+
+None.
+
+## 3. LB Policy Implementation
+
+`random_subsetting` implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+
+### 3.1 State
 
 When the policy instance is created, it generates a random integer
-`seed`, which it keeps for its whole lifetime.
+`seed`, which it keeps for its whole lifetime. The policy also keeps its
+child ([Child Policies](#51-child-policies)).
+
+### 3.2 Update
 
 On every update (new endpoints or new config), the policy computes the
-subset and sends the child an update. The update contains the subset, the
-child config, the parent's top-level attributes, and the resolution
-note:
+subset ([Subset Selection](#36-subset-selection)) and sends the child an
+update. The update contains the subset, the child config, the parent's
+top-level attributes, and the resolution note.
+
+If the endpoints field is an error, the error is passed to the child in
+place of the subset. If the child's policy name changes, the child is
+replaced using the procedure in
+[Gracefully Switching LB Policies](../05-load-balancing.md#12-gracefully-switching-lb-policies).
+
+The policy reports its child's state and picker unchanged
+([Calls From Children](#52-calls-from-children)). Returns the child's
+status.
+
+### 3.3 ExitIdle
+
+Forwarded to the child.
+
+### 3.4 ResetBackoff
+
+Forwarded to the child.
+
+### 3.5 Shutdown
+
+Shuts down the child.
+
+### 3.6 Subset Selection
 
 ```
 filter_endpoints(endpoints, subset_size, seed):
@@ -74,27 +109,39 @@ filter_endpoints(endpoints, subset_size, seed):
 Only an endpoint's first address is hashed. `AddressString` is the
 canonical `host:port` form of the address.
 
-Everything else is passed straight through: the child's state and picker
-reports, its re-resolution requests, and `ExitIdle()`, `ResetBackoff()`,
-and `Shutdown()`. The policy creates no subchannels of its own.
+## 4. Picker Implementation
 
-## 4. LB Policy API
+Not applicable: the policy reports its child's picker unchanged.
 
-`random_subsetting` implements the generic
-[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+## 5. Children and Subchannels
 
-| Operation | Behavior |
-| --- | --- |
-| `Update(update) → status` | Computes the subset and sends the child an update containing the subset, the child config, the top-level attributes, and the resolution note ([Behavior](#3-behavior)). If the endpoints field is an error, the error is passed to the child in place of the subset. If the child's policy name changes, the child is replaced using the procedure in [Gracefully Switching LB Policies](../05-load-balancing.md#12-gracefully-switching-lb-policies). Returns the child's status. |
-| `ExitIdle()` | Forwarded to the child. |
-| `ResetBackoff()` | Forwarded to the child. |
-| `Shutdown()` | Shuts down the child. |
-| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its child does. |
-| Child `UpdateState(state, status, picker)` | Passed through to the policy's own helper unchanged. |
-| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
-| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
+### 5.1 Child Policies
 
-## 5. API Requirements
+The policy has a single child, whose policy and config come from
+`childPolicy`. The child receives the update described in
+[Update](#32-update), and `ExitIdle()`, `ResetBackoff()`, and
+`Shutdown()` are passed straight through to it
+([ExitIdle](#33-exitidle), [ResetBackoff](#34-resetbackoff),
+[Shutdown](#35-shutdown)).
+
+### 5.2 Calls From Children
+
+- **`UpdateState(state, status, picker)`:** passed through to the
+  policy's own helper unchanged.
+- **`RequestReresolution()`:** forwarded to the policy's own helper.
+- **`CreateSubchannel(address, attributes)`:** passed through to the
+  policy's own helper unchanged.
+
+### 5.3 Subchannels
+
+Not applicable: the policy creates no subchannels of its own and does not
+watch subchannels; its child does.
+
+## 6. Metrics
+
+The policy records no metrics.
+
+## 7. API Requirements
 
 - gRPC MUST register this policy under the name
   `random_subsetting_experimental`, so that it can be selected through

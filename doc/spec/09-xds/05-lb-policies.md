@@ -158,7 +158,7 @@ The XdsClient converts each Cluster resource's LB configuration to a gRPC
 `loadBalancingConfig` list (JSON). It does this when it validates the resource
 (see [Cluster](03-resources/04-cluster.md)). The result is the
 `<xds_lb_policy>` that `cds` places under `priority`
-([Child config for a non-aggregate cluster](lb-policies/cds.md#6-child-config-for-a-non-aggregate-cluster)).
+([Child config for a non-aggregate cluster](lb-policies/cds.md#38-child-config-for-a-non-aggregate-cluster)).
 
 ### 2.1 `load_balancing_policy`
 
