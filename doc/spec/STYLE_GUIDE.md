@@ -187,8 +187,16 @@ Do not annotate:
   if a gRFC made them.
 - Behavior that predates the gRFC process (for example, the core HTTP/2 wire
   protocol), or that no gRFC introduced.
-- Every paragraph a gRFC touched. One annotation per feature, at the section
-  that specifies it.
+- Every paragraph a gRFC touched.
+
+A feature often appears in more than one document: for example, connection
+scaling is specified in Subchannels and Connections, configured through a
+service config field, and set from xDS by a Cluster field. Annotate **every**
+section that a feature adds or that is dedicated to it, in every document, not
+just the main one (in this example: the subchannel section, the service config
+`connectionScaling` section, and the xDS section that maps the Cluster field).
+A part of a feature that has no section of its own (a single table row, list
+item, or sentence within a larger section) is not annotated.
 
 ### 5.2 Format
 
