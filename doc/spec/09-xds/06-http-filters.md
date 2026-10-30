@@ -80,15 +80,19 @@ supported on the server, or vice versa. Effectively there are two registries:
 - The **server registry** is consulted when the HCM is inside a TCP Listener
   (a Listener with `address` and `filter_chains`).
 
-The following filter types are currently registered:
+The following filter types are currently registered. The config type names
+in the table are relative to the `envoy.extensions.filters.http.` package
+prefix; for example, `router.v3.Router` is
+`envoy.extensions.filters.http.router.v3.Router`. Each filter's section gives
+its full type names.
 
 | Filter type | Top-level config type | Override config type | Client | Server | Terminal | Section |
 |---|---|---|---|---|---|---|
-| Router | `envoy.extensions.filters.http.router.v3.Router` | — | yes | yes | yes | [Router](#7-router) |
-| Fault injection | `envoy.extensions.filters.http.fault.v3.HTTPFault` | `envoy.extensions.filters.http.fault.v3.HTTPFault` | yes | no | no | [Fault Injection](#8-fault-injection) |
-| RBAC | `envoy.extensions.filters.http.rbac.v3.RBAC` | `envoy.extensions.filters.http.rbac.v3.RBACPerRoute` | no | yes | no | [RBAC](#9-rbac) |
-| Stateful session | `envoy.extensions.filters.http.stateful_session.v3.StatefulSession` | `envoy.extensions.filters.http.stateful_session.v3.StatefulSessionPerRoute` | yes | no | no | [Stateful Session Affinity](#10-stateful-session-affinity) |
-| GCP authentication | `envoy.extensions.filters.http.gcp_authn.v3.GcpAuthnFilterConfig` | — (see [Configuration Validation](#111-configuration-validation)) | yes | no | no | [GCP Authentication](#11-gcp-authentication) |
+| Router | `router.v3.Router` | — | yes | yes | yes | [Router](#7-router) |
+| Fault injection | `fault.v3.HTTPFault` | `fault.v3.HTTPFault` | yes | no | no | [Fault Injection](#8-fault-injection) |
+| RBAC | `rbac.v3.RBAC` | `rbac.v3.RBACPerRoute` | no | yes | no | [RBAC](#9-rbac) |
+| Stateful session | `stateful_session.v3.StatefulSession` | `stateful_session.v3.StatefulSessionPerRoute` | yes | no | no | [Stateful Session Affinity](#10-stateful-session-affinity) |
+| GCP authentication | `gcp_authn.v3.GcpAuthnFilterConfig` | — (see [Configuration Validation](#111-configuration-validation)) | yes | no | no | [GCP Authentication](#11-gcp-authentication) |
 
 The router is the only terminal filter type. Implementations MAY hard-code
 the requirement that the router is the last filter instead of implementing a
@@ -573,10 +577,13 @@ works together with the `xds_override_host` LB policy
 
 ### 10.1 Configuration Validation
 
+In the table, `CookieBasedSessionState` is
+`envoy.extensions.http.stateful_session.cookie.v3.CookieBasedSessionState`.
+
 | Field | Handling |
 |---|---|
 | `StatefulSession.session_state` | `TypedExtensionConfig`. If unset, the instance is a no-op. |
-| `session_state.typed_config` | MUST be `envoy.extensions.http.stateful_session.cookie.v3.CookieBasedSessionState` (after `TypedStruct` unwrapping); any other type or an unparseable message → NACK. |
+| `session_state.typed_config` | MUST be `CookieBasedSessionState` (after `TypedStruct` unwrapping); any other type or an unparseable message → NACK. |
 | `CookieBasedSessionState.cookie` | Required (`envoy.type.http.v3.Cookie`); absent → NACK. |
 | `cookie.name` | Required, non-empty; empty → NACK. |
 | `cookie.path` | Optional. If empty, all request paths match. |

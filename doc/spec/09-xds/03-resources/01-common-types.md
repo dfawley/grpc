@@ -95,7 +95,7 @@ resource. Since gRPC supports only the aggregated (ADS) protocol, a
 | `HttpConnectionManager.rds.config_source` | MUST be present and have either `ads` or `self` set. |
 | `Cluster.eds_cluster_config.eds_config` | MUST be present and have either `ads` or `self` set. |
 | `Cluster.lrs_server` | If present, MUST have `self` set. |
-| `LocalityLbEndpoints.leds_cluster_locality_config.leds_config` | MUST be present and have `self` set. |
+| `leds_config` in `LocalityLbEndpoints.leds_cluster_locality_config` | MUST be present and have `self` set. |
 
 Violations cause the resource to be rejected. All other `ConfigSource` fields
 (`resource_api_version`, `initial_fetch_timeout`, `authorities`, and so on) are

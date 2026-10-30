@@ -154,9 +154,13 @@ The deprecated `build_version` field is never sent.
 
 | Field | Type | Required | Semantics |
 | --- | --- | --- | --- |
-| `client_listener_resource_name_template` | string | No | Template for the client Listener resource name when a channel's `xds` target URI has this authority. Every `%s` is replaced by the percent-encoded service authority (see [XdsClient](02-xds-client.md)). If set to a non-empty value, it MUST start with `xdstp://<authority_name>/`, or the bootstrap is invalid. If unset or empty, it defaults to `xdstp://<authority_name>/envoy.config.listener.v3.Listener/%s`, with `<authority_name>` percent-encoded as a URI authority. |
+| `client_listener_resource_name_template` | string | No | Template for the client Listener resource name when a channel's `xds` target URI has this authority. Every `%s` is replaced by the percent-encoded service authority (see [XdsClient](02-xds-client.md)). If set to a non-empty value, it MUST start with `xdstp://<authority_name>/`, or the bootstrap is invalid. If unset or empty, it defaults to the value given below the table. |
 | `xds_servers` | array of [XdsServer](#41-xdsserver-object) | No | The xDS servers for this authority, in priority order. If unset or empty, the top-level `xds_servers` are used. A server listed under several authorities is the same server, and the XdsClient shares one ADS stream for all of them (see [XdsClient](02-xds-client.md)). |
 | `fallback_on_reachability_only` | bool | No; default `false` | If `true`, the XdsClient falls back to the next server for this authority whenever the current server is unreachable, even if every watched resource is already cached. If `false`, it falls back only when at least one watched resource is not cached (see [XdsClient](02-xds-client.md)). |
+
+If `client_listener_resource_name_template` is unset or empty, it defaults to
+`xdstp://<authority_name>/envoy.config.listener.v3.Listener/%s`, with
+`<authority_name>` percent-encoded as a URI authority.
 
 <!-- REVIEW(divergence) [XDS_BOOTSTRAP-3]: Empty authority client_listener_resource_name_template. Go (internal/xds/bootstrap/bootstrap.go, xds_resolver.go) and C++ (xds_bootstrap_grpc.cc, xds_resolver.cc) treat "" as unset and use the default. Java (BootstrapperImpl) applies the default only when the field is absent; "" fails the xdstp://<authority>/ prefix check, so the bootstrap is invalid. Spec says: empty = unset (Go/C++). -->
 

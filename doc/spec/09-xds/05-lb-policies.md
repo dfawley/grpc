@@ -189,17 +189,42 @@ def Convert(load_balancing_policy, depth = 0):
 - After conversion, the result MUST be parsed by the gRPC LB policy registry.
   If conversion or parsing fails, the Cluster resource is invalid (NACKed).
 
-Converters:
+Converters. Each entry gives the message name, the full `typed_config`
+type (all are in the `envoy.extensions.load_balancing_policies` package
+hierarchy), and the gRPC config produced:
 
-| `typed_config` type | gRPC config produced |
-| --- | --- |
-| `envoy.extensions.load_balancing_policies.round_robin.v3.RoundRobin` | `{"round_robin": {}}` |
-| `envoy.extensions.load_balancing_policies.wrr_locality.v3.WrrLocality` | `{"xds_wrr_locality_experimental": {"childPolicy": Convert(endpoint_picking_policy, depth + 1)}}`. `endpoint_picking_policy` is required. |
-| `envoy.extensions.load_balancing_policies.ring_hash.v3.RingHash` | `{"ring_hash_experimental": {"minRingSize": m, "maxRingSize": M}}`. `m` = `minimum_ring_size`, default 1024. `M` = `maximum_ring_size`, default 8388608. Both MUST be in [1, 8388608], and `m` ≤ `M`. `hash_function` MUST be `XX_HASH` or `DEFAULT_HASH`. `maxRingSize` MUST always be set explicitly, so that the xDS default applies (it is still limited by the client-side ring size cap; see [ring_hash](../04-client-channel/lb-policies/ring_hash.md)). |
-| `envoy.extensions.load_balancing_policies.least_request.v3.LeastRequest` | `{"least_request_experimental": {"choiceCount": c}}`. `c` = `choice_count`, default 2. `active_request_bias` and `slow_start_config` are ignored. |
-| `envoy.extensions.load_balancing_policies.client_side_weighted_round_robin.v3.ClientSideWeightedRoundRobin` | `{"weighted_round_robin": {...}}` with each field that is set: `enable_oob_load_report` → `enableOobLoadReport`, `oob_reporting_period` → `oobReportingPeriod`, `blackout_period` → `blackoutPeriod`, `weight_update_period` → `weightUpdatePeriod`, `weight_expiration_period` → `weightExpirationPeriod`, `error_utilization_penalty` → `errorUtilizationPenalty` (MUST be ≥ 0). Durations MUST be valid. |
-| `envoy.extensions.load_balancing_policies.pick_first.v3.PickFirst` | `{"pick_first": {"shuffleAddressList": shuffle_address_list}}` |
-| `envoy.extensions.load_balancing_policies.random_subsetting.v3.RandomSubsetting` | `{"random_subsetting_experimental": {"subsetSize": subset_size, "childPolicy": Convert(child_policy, depth + 1)}}`. `subset_size` MUST be > 0, and `child_policy` is required. |
+- **`RoundRobin`** (`envoy.extensions.load_balancing_policies.round_robin.v3.RoundRobin`) →
+  `{"round_robin": {}}`.
+- **`WrrLocality`** (`envoy.extensions.load_balancing_policies.wrr_locality.v3.WrrLocality`) →
+  `{"xds_wrr_locality_experimental": {"childPolicy": Convert(endpoint_picking_policy, depth + 1)}}`.
+  `endpoint_picking_policy` is required.
+- **`RingHash`** (`envoy.extensions.load_balancing_policies.ring_hash.v3.RingHash`) →
+  `{"ring_hash_experimental": {"minRingSize": m, "maxRingSize": M}}`.
+  - `m` = `minimum_ring_size`, default 1024. `M` = `maximum_ring_size`,
+    default 8388608.
+  - Both MUST be in [1, 8388608], and `m` ≤ `M`.
+  - `hash_function` MUST be `XX_HASH` or `DEFAULT_HASH`.
+  - `maxRingSize` MUST always be set explicitly, so that the xDS default
+    applies (it is still limited by the client-side ring size cap; see
+    [ring_hash](../04-client-channel/lb-policies/ring_hash.md)).
+- **`LeastRequest`** (`envoy.extensions.load_balancing_policies.least_request.v3.LeastRequest`) →
+  `{"least_request_experimental": {"choiceCount": c}}`. `c` = `choice_count`,
+  default 2. `active_request_bias` and `slow_start_config` are ignored.
+- **`ClientSideWeightedRoundRobin`**
+  (`envoy.extensions.load_balancing_policies.client_side_weighted_round_robin.v3.ClientSideWeightedRoundRobin`) →
+  `{"weighted_round_robin": {...}}` with each field that is set, as follows.
+  Durations MUST be valid.
+  - `enable_oob_load_report` → `enableOobLoadReport`
+  - `oob_reporting_period` → `oobReportingPeriod`
+  - `blackout_period` → `blackoutPeriod`
+  - `weight_update_period` → `weightUpdatePeriod`
+  - `weight_expiration_period` → `weightExpirationPeriod`
+  - `error_utilization_penalty` → `errorUtilizationPenalty` (MUST be ≥ 0)
+- **`PickFirst`** (`envoy.extensions.load_balancing_policies.pick_first.v3.PickFirst`) →
+  `{"pick_first": {"shuffleAddressList": shuffle_address_list}}`.
+- **`RandomSubsetting`** (`envoy.extensions.load_balancing_policies.random_subsetting.v3.RandomSubsetting`) →
+  `{"random_subsetting_experimental": {"subsetSize": subset_size, "childPolicy": Convert(child_policy, depth + 1)}}`.
+  `subset_size` MUST be > 0, and `child_policy` is required.
 
 The meaning of each gRPC config field is in that policy's [Client Channel](../04-client-channel/README.md) document.
 Applications can register custom LB policies in the gRPC LB policy registry
@@ -252,7 +277,7 @@ API:
 Each xDS-specific policy is specified in its own document:
 
 | Policy | Role |
-| --- | --- | --- |
+| --- | --- |
 | [`xds_cluster_manager`](lb-policies/xds_cluster_manager.md) | Top-level policy; routes each pick to the child for the cluster chosen by the ConfigSelector. |
 | [`cds`](lb-policies/cds.md) | Builds the subtree for one cluster from the `XdsConfig`, including aggregate clusters. |
 | [`xds_cluster_impl`](lb-policies/xds_cluster_impl.md) | Per-cluster drops, circuit breaking, load reporting, labels, authority rewriting, and transport security. |

@@ -177,7 +177,9 @@ and address `0.0.0.0:8080` →
 The server watches for an `envoy.config.listener.v3.Listener` resource. General
 Listener and HttpConnectionManager validation is in
 [Listener (Client Side)](03-resources/02-listener.md). For a TCP Listener the
-following rules apply; violations NACK the resource:
+following rules apply; violations NACK the resource. In the table,
+`HttpConnectionManager` is
+`envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager`.
 
 | Field | Rule |
 |---|---|
@@ -186,7 +188,7 @@ following rules apply; violations NACK the resource:
 | `use_original_dst` | MUST NOT be `true`. |
 | `filter_chains` / `default_filter_chain` | At least one of them MUST be present. Every entry, including `default_filter_chain`, MUST be valid (below). |
 | `FilterChain.filter_chain_match` | Valid per [Filter Chain Selection](#5-filter-chain-selection) (CIDR `address_prefix` values MUST be valid IP addresses; `source_type` MUST be a defined enum value). |
-| `FilterChain.filters` (network filters) | MUST contain exactly one entry: an `envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager`. (It must be the last entry and names must be unique; since HCM is the only supported network filter, this means exactly one entry.) The type is taken from `Filter.typed_config`, unwrapping `TypedStruct` (a `TypedStruct`-wrapped HCM is then rejected, since the HCM accepts only the serialized protobuf form; see [Listener (Client Side)](03-resources/02-listener.md)); the `envoy.config.route.v3.FilterConfig` wrapper does not apply to network filters. |
+| `FilterChain.filters` (network filters) | MUST contain exactly one entry: an `HttpConnectionManager`. (It must be the last entry and names must be unique; since HCM is the only supported network filter, this means exactly one entry.) The type is taken from `Filter.typed_config`, unwrapping `TypedStruct` (a `TypedStruct`-wrapped HCM is then rejected, since the HCM accepts only the serialized protobuf form; see [Listener (Client Side)](03-resources/02-listener.md)); the `envoy.config.route.v3.FilterConfig` wrapper does not apply to network filters. |
 | HttpConnectionManager | Valid per [Listener (Client Side)](03-resources/02-listener.md), with `http_filters` validated against the **server** registry ([xDS HTTP Filters](06-http-filters.md)). MUST contain `route_config` or `rds`. |
 | `FilterChain.transport_socket` | Valid per [xDS Security](08-security.md). |
 | FilterChainMatch uniqueness | After normalization, no two filter chains may have identical matchers ([Normalization and Uniqueness](#52-normalization-and-uniqueness)). |

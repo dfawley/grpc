@@ -61,13 +61,16 @@ performed; server identity is instead checked as described in [Server Identity V
 ### 2.1 Locating the TLS Context
 
 The CDS resource's `Cluster.transport_socket` ([Cluster](03-resources/04-cluster.md))
-determines client transport security:
+determines client transport security. In the table, `UpstreamTlsContext` is
+`envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext`, and
+`Http11ProxyUpstreamTransport` is
+`envoy.extensions.transport_sockets.http_11_proxy.v3.Http11ProxyUpstreamTransport`.
 
 | `transport_socket.typed_config` type (after `TypedStruct` unwrapping) | Result |
 |---|---|
 | absent (`transport_socket` unset) | No xDS security configuration (fallback credentials). |
-| `envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext` | Validated per [`UpstreamTlsContext` Validation](#22-upstreamtlscontext-validation) and used. |
-| `envoy.extensions.transport_sockets.http_11_proxy.v3.Http11ProxyUpstreamTransport` | HTTP CONNECT wrapper ([HTTP CONNECT and TLS](#6-http-connect-and-tls)). Its nested `transport_socket` MUST be unset or contain an `UpstreamTlsContext`, which is validated and used exactly as if it had been in `Cluster.transport_socket`. Any other nested type → NACK. |
+| `UpstreamTlsContext` | Validated per [`UpstreamTlsContext` Validation](#22-upstreamtlscontext-validation) and used. |
+| `Http11ProxyUpstreamTransport` | HTTP CONNECT wrapper ([HTTP CONNECT and TLS](#6-http-connect-and-tls)). Its nested `transport_socket` MUST be unset or contain an `UpstreamTlsContext`, which is validated and used exactly as if it had been in `Cluster.transport_socket`. Any other nested type → NACK. |
 | any other type | NACK. |
 
 `Cluster.transport_socket_matches` is ignored.

@@ -244,10 +244,8 @@ All other `common_lb_config` fields are ignored.
 Any other type rejects the resource. `transport_socket.name` and
 `transport_socket_matches` are ignored.
 
-| Type | Handling |
-| --- | --- |
-| `envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext` | Validated and parsed as specified in [xDS Security](../08-security.md). The parsed TLS config is used only if the channel uses xDS credentials. |
-| `envoy.extensions.transport_sockets.http_11_proxy.v3.Http11ProxyUpstreamTransport` | HTTP CONNECT wrapper (see below). |
+- `envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext`: Validated and parsed as specified in [xDS Security](../08-security.md). The parsed TLS config is used only if the channel uses xDS credentials.
+- `envoy.extensions.transport_sockets.http_11_proxy.v3.Http11ProxyUpstreamTransport`: HTTP CONNECT wrapper (see below).
 
 ### 6.1 `Http11ProxyUpstreamTransport`
 
