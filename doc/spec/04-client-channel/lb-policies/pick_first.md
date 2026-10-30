@@ -7,16 +7,19 @@
 
 <!-- Sources: doc/load-balancing.md, grpc/service_config/service_config.proto (PickFirstConfig), A61, A62, A105, A88 -->
 
-## 1. Purpose
+## 1. Overview
 
 `pick_first` connects to one address and sends all calls on it until the
-connection fails or is closed. It is:
+connection fails or is closed. It is a leaf policy: it creates and manages
+subchannels directly (see
+[Load Balancing: Policy Hierarchy](../05-load-balancing.md#9-policy-hierarchy)).
+It is:
 
 - The default LB policy for a channel when no policy is configured (see
-  [../service-config.md](../service-config.md)).
+  [Service Config: `loadBalancingConfig`](../03-service-config.md#52-loadbalancingconfig)).
 - The universal leaf policy: petiole policies create one `pick_first`
   child per endpoint to pick an address within that endpoint (see
-  [../load-balancing.md](../load-balancing.md)).
+  [Load Balancing: Leaf, Parent, and Petiole Policies](../05-load-balancing.md#91-leaf-parent-and-petiole-policies)).
 
 Registered name: `pick_first`.
 
@@ -28,18 +31,15 @@ Proto: `PickFirstConfig` in `grpc/service_config/service_config.proto`.
 { "pick_first": { "shuffleAddressList": false } }
 ```
 
-| Field (JSON) | Type | Default | Description |
-| --- | --- | --- | --- |
-| `shuffleAddressList` | bool | `false` | If true, randomly shuffle the order of the endpoints on every update from the parent ([Address List Processing](#3-address-list-processing)). |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `shuffleAddressList` | bool | No | `false` | If true, randomly shuffle the order of the endpoints on every update from the parent ([Address List Processing](#3-address-list-processing)). |
 
-The config is valid if `shuffleAddressList` is absent or a JSON boolean.
+### 2.1 Validation
 
-### 2.1 Channel Options
-
-| Option | Default | Description |
-| --- | --- | --- |
-| Happy Eyeballs Connection Attempt Delay | 250 ms | The delay before the next address is tried in parallel ([Happy Eyeballs Connection Algorithm](#4-happy-eyeballs-connection-algorithm)). Values below 100 ms MUST be treated as 100 ms. Values above 2 s MUST be treated as 2 s. |
-| Internal health-reporting option | disabled | Set only by petiole parent policies. Not settable by applications ([Health Reporting Under Petiole Policies](#7-health-reporting-under-petiole-policies)). |
+- The config is invalid if `shuffleAddressList` is present and is not a
+  JSON boolean. An invalid config is rejected as described in
+  [Load Balancing: LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration).
 
 ## 3. Address List Processing
 
@@ -56,7 +56,7 @@ builds a flat, ordered address list as follows:
 3. **De-duplicate.** Repeated addresses MAY be removed, keeping the
    first occurrence, OR left in place if doing so does not cause extra
    connections (for example, because the repeated entries share one
-   subchannel; see [Subchannel Sharing](../subchannels.md#4-subchannel-sharing)).
+   subchannel; see [Subchannel Sharing](../06-subchannels.md#4-subchannel-sharing)).
    De-duplicating earlier (for example, before the shuffle) is also allowed.
    The only difference is which copy of a repeated address is kept.
 4. **Interleave address families** (RFC 8305 §4). Group the addresses by
@@ -71,6 +71,8 @@ already done before `pick_first` sees the list. Shuffling happens on
 each update from the parent, not on reconnection.
 
 ## 4. Happy Eyeballs Connection Algorithm
+
+> **Introduced by:** [gRFC A61: IPv4 and IPv6 Dualstack Backend Support](https://github.com/grpc/proposal/blob/master/A61-IPv4-IPv6-dualstack-backends.md)
 
 `pick_first` creates one subchannel per address in the processed list,
 and then makes a **Happy Eyeballs pass** over the list in order. For
@@ -95,7 +97,8 @@ requested its connection and whether or not a pass is in progress,
 
 1. Cancel the Connection Attempt Delay timer, if running.
 2. Release all other subchannels. This cancels their in-flight attempts
-   unless the subchannel is shared ([../subchannels.md](../subchannels.md)).
+   unless the subchannel is shared
+   ([Subchannel Sharing](../06-subchannels.md#4-subchannel-sharing)).
 3. Report READY with a picker that returns Complete with the selected
    subchannel. If the health-reporting option is enabled, see
    [Health Reporting Under Petiole Policies](#7-health-reporting-under-petiole-policies).
@@ -130,7 +133,7 @@ starts a new pass.
 | Update with empty list, or endpoint error with no previous list | any | Release all subchannels, report TRANSIENT_FAILURE with a failing picker, and reject the update (`UNAVAILABLE`). |
 | Endpoint error with a previous list | any | Ignore the error and keep the current list and state. |
 | Selected subchannel reports IDLE | READY | Release subchannels, request re-resolution, report IDLE. |
-| Selected subchannel reports CONNECTING or TRANSIENT_FAILURE | READY | Can happen with connection scaling ([../subchannels.md](../subchannels.md)). Request re-resolution, report CONNECTING, and start a new Happy Eyeballs pass over all subchannels. |
+| Selected subchannel reports CONNECTING or TRANSIENT_FAILURE | READY | Can happen with connection scaling ([MAX_CONCURRENT_STREAMS Connection Scaling](../06-subchannels.md#8-max_concurrent_streams-connection-scaling)). Request re-resolution, report CONNECTING, and start a new Happy Eyeballs pass over all subchannels. |
 | `ExitIdle()` | IDLE | Recreate subchannels from the most recent list, start a pass, report CONNECTING. |
 | `ExitIdle()` | other | No-op. |
 
@@ -151,13 +154,16 @@ Pick(args):
 
 ## 7. Health Reporting Under Petiole Policies
 
+> **Introduced by:** [gRFC A61: IPv4 and IPv6 Dualstack Backend Support](https://github.com/grpc/proposal/blob/master/A61-IPv4-IPv6-dualstack-backends.md)
+
 When the internal health-reporting option is enabled:
 
 - Connection management (passes, selection, retries) uses only the raw
   connectivity state, exactly as described above.
 - After selecting a subchannel, `pick_first` starts a generic health
-  watch on it ([../load-balancing.md](../load-balancing.md)). It reports
-  the health state to its parent instead of READY:
+  watch on it
+  ([Load Balancing: Generic Health Reporting](../05-load-balancing.md#10-generic-health-reporting)).
+  It reports the health state to its parent instead of READY:
   - Health READY: report READY with a picker that returns the
     subchannel.
   - Health CONNECTING: report CONNECTING with a queueing picker.
@@ -166,7 +172,7 @@ When the internal health-reporting option is enabled:
 - The health watch is stopped when the subchannel is released.
 
 When the option is disabled, `pick_first` never starts a health watch,
-so [client-side health checking](../health-checking.md) and outlier
+so [client-side health checking](../08-health-checking.md) and outlier
 ejection have no effect on it.
 
 ## 8. Re-resolution
@@ -191,15 +197,39 @@ MUST include:
 For an empty endpoint list, the message MUST say that the list was empty
 and include the resolution note.
 
-## 10. API Requirements
+## 10. Channel Options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Happy Eyeballs Connection Attempt Delay | 250 ms | The delay before the next address is tried in parallel ([Happy Eyeballs Connection Algorithm](#4-happy-eyeballs-connection-algorithm)). Values below 100 ms MUST be treated as 100 ms. Values above 2 s MUST be treated as 2 s. |
+| Internal health-reporting option | disabled | Set only by petiole parent policies. Not settable by applications ([Health Reporting Under Petiole Policies](#7-health-reporting-under-petiole-policies)). |
+
+## 11. LB Policy API
+
+`pick_first` implements the generic LB policy API
+([Load Balancing: LB Policy API](../05-load-balancing.md#4-lb-policy-api)) as
+follows:
+
+| Operation | Behavior |
+| --- | --- |
+| `Update(update) → status` | A non-empty endpoint list is processed as in [Address List Processing](#3-address-list-processing) and applied according to the current state ([State Machine and Updates](#5-state-machine-and-updates)); `shuffleAddressList` is applied on every update. An empty list, or an endpoint error with no previous list, releases all subchannels, reports TRANSIENT_FAILURE, and returns `UNAVAILABLE` ([Error Messages](#9-error-messages)). An endpoint error with a previous list is ignored. Endpoint and address attributes are passed to `CreateSubchannel()`. Returns OK in all other cases. |
+| `ExitIdle()` | In IDLE, recreates subchannels from the most recent list, starts a Happy Eyeballs pass, and reports CONNECTING. A no-op in any other state ([State Machine and Updates](#5-state-machine-and-updates)). |
+| `ResetBackoff()` | Calls `ResetBackoff()` on all of its subchannels. |
+| `Shutdown()` | Cancels the Connection Attempt Delay timer, stops any health watch, and releases all subchannels. |
+| Subchannel connectivity / health updates | The raw connectivity state of every subchannel drives the [Happy Eyeballs Connection Algorithm](#4-happy-eyeballs-connection-algorithm), selection, steady-state retries, and the transitions in [State Machine and Updates](#5-state-machine-and-updates). Re-resolution is requested as described in [Re-resolution](#8-re-resolution). A health watch is started only on the selected subchannel and only when the internal health-reporting option is enabled; its state is what `pick_first` reports to its parent ([Health Reporting Under Petiole Policies](#7-health-reporting-under-petiole-policies)). |
+| Child `UpdateState(state, status, picker)` | Not applicable: the policy has no child policies. |
+| Child `RequestReresolution()` | Not applicable: the policy has no child policies. |
+| Child `CreateSubchannel(address, attributes)` | Not applicable: the policy has no child policies. |
+
+## 12. API Requirements
 
 - gRPC MUST register this policy under the name `pick_first`, so that it
   can be selected through `loadBalancingConfig` in the service config and
   used as a child by other policies, including custom ones
-  ([../load-balancing.md](../load-balancing.md)).
+  ([Load Balancing](../05-load-balancing.md)).
 - The channel API MUST provide a way to set the Happy Eyeballs Connection
-  Attempt Delay ([Channel Options](#21-channel-options)).
+  Attempt Delay ([Channel Options](#10-channel-options)).
 - The internal health-reporting option MUST be available to petiole
   policies, including custom ones, and MUST NOT be settable by
   applications in any other way
-  ([../load-balancing.md](../load-balancing.md)).
+  ([Load Balancing: Generic Health Reporting](../05-load-balancing.md#10-generic-health-reporting)).

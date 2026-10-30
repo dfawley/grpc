@@ -9,22 +9,85 @@
 
 > **Experimental:** This policy is registered as `cds_experimental`.
 
-**Registered name:** `cds_experimental`.
+> **Introduced by:** [gRFC A27: xDS-Based Global Load Balancing](https://github.com/grpc/proposal/blob/master/A27-xds-global-load-balancing.md)
 
-**Config** (`CdsConfig`):
+## 1. Overview
 
-| JSON field | Type | Description |
-| --- | --- | --- |
-| `cluster` | string | Required. The cluster name. It MUST NOT change over the life of the policy instance. |
-| `isDynamic` | bool | Optional, default false. True for a cluster that is not named by the route configuration, such as a cluster returned by the lookup server of the RLS cluster specifier plugin (see [RLS Cluster Specifier Plugin](../resources/route-configuration.md#53-rls-cluster-specifier-plugin)). The policy then obtains a dynamic subscription. |
+The `cds` policy builds the LB policy subtree for one xDS cluster from the
+`XdsConfig` resolver attribute (see [XdsConfig](../04-client.md#3-xdsconfig)).
+For an EDS or LOGICAL_DNS cluster, its child is an `outlier_detection` →
+`xds_cluster_impl` → `xds_override_host` → `priority` chain, and it flattens
+the cluster's endpoint data into the endpoint list passed to that child. For an
+aggregate cluster, its child is a `priority` policy with one `cds` child per
+leaf cluster.
 
-## 1. Update handling
+The `cds` policy is a parent policy with a single child (see
+[Policy Hierarchy](../../04-client-channel/05-load-balancing.md#9-policy-hierarchy)).
+
+Registered name: `cds_experimental`.
+
+### 1.1 Position in the xDS LB Policy Tree
+
+<!-- XDS-LB-TREE: generated; identical in every xDS LB policy document except for the highlighted policy -->
+- [`xds_cluster_manager`](xds_cluster_manager.md): one child per cluster and per cluster specifier plugin
+  - **[`cds`](cds.md) (this policy)**: one per cluster
+    - Non-aggregate cluster (EDS or LOGICAL_DNS):
+      - [`outlier_detection`](../../04-client-channel/lb-policies/outlier_detection.md)
+        - [`xds_cluster_impl`](xds_cluster_impl.md)
+          - [`xds_override_host`](xds_override_host.md)
+            - [`priority`](../../04-client-channel/lb-policies/priority.md): one child per EDS priority
+              - The cluster's xDS LB policy ([xDS LB Policy Registry](../05-lb-policies.md#2-xds-lb-policy-registry)); by default:
+                - [`xds_wrr_locality`](xds_wrr_locality.md)
+                  - [`weighted_target`](../../04-client-channel/lb-policies/weighted_target.md): one child per locality
+                    - Endpoint picking policy, e.g. [`round_robin`](../../04-client-channel/lb-policies/round_robin.md), [`weighted_round_robin`](../../04-client-channel/lb-policies/weighted_round_robin.md), or [`least_request`](../../04-client-channel/lb-policies/least_request.md)
+                      - [`pick_first`](../../04-client-channel/lb-policies/pick_first.md): one per endpoint
+              - Or another converted policy, e.g. [`ring_hash`](../../04-client-channel/lb-policies/ring_hash.md) or [`random_subsetting`](../../04-client-channel/lb-policies/random_subsetting.md)
+    - Aggregate cluster:
+      - [`priority`](../../04-client-channel/lb-policies/priority.md): one child per leaf cluster
+        - **[`cds`](cds.md) (this policy)**: one per leaf cluster, each building the non-aggregate subtree above
+  - [`rls`](../../04-client-channel/lb-policies/rls.md): one per RLS cluster specifier plugin
+    - **[`cds`](cds.md) (this policy)**: one per target cluster returned by the lookup server
+<!-- /XDS-LB-TREE -->
+
+`cds` is a child of `xds_cluster_manager`; of `rls`, for a cluster returned by
+an RLS lookup; or of an aggregate cluster's `priority` policy, for a leaf
+cluster. For a non-aggregate cluster its child is `outlier_detection`. For an
+aggregate cluster its child is a `priority` policy with one `cds` child per leaf
+cluster.
+
+## 2. Configuration
+
+Proto: `CdsConfig` in `grpc/service_config/service_config.proto`.
+
+```json
+{
+  "cds_experimental": {
+    "cluster": "cluster_a",
+    "isDynamic": false
+  }
+}
+```
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `cluster` | string | Yes | — | The cluster name. It MUST NOT change over the life of the policy instance. |
+| `isDynamic` | bool | No | `false` | True for a cluster that is not named by the route configuration, such as a cluster returned by the lookup server of the RLS cluster specifier plugin (see [RLS Cluster Specifier Plugin](../03-resources/03-route-configuration.md#53-rls-cluster-specifier-plugin)). The policy then obtains a dynamic subscription. |
+
+### 2.1 Validation
+
+The config is invalid, and is rejected as described in
+[LB Policy Registry and Configuration](../../04-client-channel/05-load-balancing.md#2-lb-policy-registry-and-configuration),
+if:
+
+- `cluster` is missing.
+
+## 3. Update handling
 
 On each update, the `cds` policy:
 
 1. If `isDynamic` is true and it holds no subscription yet, obtains a cluster
    subscription for `cluster` from the cluster subscription interface
-   attribute (see [Dynamic cluster subscriptions](../client.md)). It holds the subscription until the
+   attribute (see [Dynamic cluster subscriptions](../04-client.md)). It holds the subscription until the
    policy is destroyed.
 2. Looks up `cluster` in the `XdsConfig` attribute:
    - **Missing entry, dynamic cluster:** ignores the update and keeps its
@@ -37,22 +100,22 @@ On each update, the `cds` policy:
    - **Entry is an error** (for example, the cluster does not exist): destroys
      its child policy and reports TRANSIENT_FAILURE with a picker that returns
      a **Drop** result with that UNAVAILABLE status for every pick (see
-     [Pick Results](../../04-client-channel/load-balancing.md#62-pick-results)).
+     [Pick Results](../../04-client-channel/05-load-balancing.md#62-pick-results)).
      The RPC fails even if it is wait_for_ready. A queued RPC would keep its
      cluster reference
-     ([Cluster references and two-phase removal](../client.md#54-cluster-references-and-two-phase-removal))
+     ([Cluster references and two-phase removal](../04-client.md#54-cluster-references-and-two-phase-removal))
      for as long as it waits, so a cluster that no route names any more could
      never be removed.
 3. For an **EDS or LOGICAL_DNS** cluster: computes the priority child names
-   ([Priority child names](#2-priority-child-names)), builds the endpoint list
-   ([Endpoint list and attributes](#3-endpoint-list-and-attributes)), and builds the child config
-   ([Child config for a non-aggregate cluster](#4-child-config-for-a-non-aggregate-cluster)). The
+   ([Priority child names](#4-priority-child-names)), builds the endpoint list
+   ([Endpoint list and attributes](#5-endpoint-list-and-attributes)), and builds the child config
+   ([Child config for a non-aggregate cluster](#6-child-config-for-a-non-aggregate-cluster)). The
    resolution note passed to the child is the `"; "`-joined non-empty values
    of the update's resolution note and the cluster's `resolution_note` from the
    `XdsConfig`. If the cluster's `ClusterConfig` is identical to the one from
    the previous update, the policy MAY skip updating the child.
 4. For an **aggregate** cluster: builds the child config described in
-   [Child config for an aggregate cluster](#5-child-config-for-an-aggregate-cluster) and passes the
+   [Child config for an aggregate cluster](#7-child-config-for-an-aggregate-cluster) and passes the
    aggregate's `resolution_note` as the child's resolution note. The endpoint
    list is empty.
 5. Creates the child policy (on the first update) and updates it. The
@@ -63,18 +126,16 @@ The `cds` policy passes its child's connectivity state up unchanged. For a
 **non-aggregate** cluster, it wraps the child's picker so that, on every
 pick, the picker sets the `grpc.lb.backend_service` optional label of the
 call attempt to the cluster name (see
-[Instrumentation](../../08-observability/instrumentation.md) and
-[Metric Catalog](../../08-observability/metrics.md)). The `cds` policy for
+[Instrumentation](../../08-observability/01-instrumentation.md) and
+[Metric Catalog](../../08-observability/03-metrics.md)). The `cds` policy for
 an aggregate cluster does not set the label; the leaf `cds` policies below it
 do, so the label is the leaf cluster name. For a non-aggregate cluster, the
 policy also passes the cluster name to its child as the **backend service**
 top-level attribute, which `weighted_round_robin` uses for its metric labels,
 and sets it as a per-endpoint attribute
-([Endpoint list and attributes](#3-endpoint-list-and-attributes)).
+([Endpoint list and attributes](#5-endpoint-list-and-attributes)).
 
-Re-resolution requests from the child are forwarded to the channel.
-
-## 2. Priority child names
+## 4. Priority child names
 
 Each priority of an EDS or LOGICAL_DNS cluster becomes a child of the
 `priority` policy, named `{cluster=<cluster>, child_number=<n>}`. To avoid
@@ -120,7 +181,7 @@ def UpdateChildNumbers(old_priorities, new_priorities):
 
 When the cluster becomes an aggregate cluster, this state is reset.
 
-## 3. Endpoint list and attributes
+## 5. Endpoint list and attributes
 
 For an EDS or LOGICAL_DNS cluster, the `cds` policy flattens the endpoint data
 from the `XdsConfig` into the endpoint list passed to its child. Endpoints are
@@ -134,14 +195,14 @@ attributes**:
 | --- | --- |
 | Hierarchical path | `[<priority child name>, <locality name string>]`. The first element routes the endpoint to its `priority` child; the second routes it to its locality child under `xds_wrr_locality` / `weighted_target` (see [priority](../../04-client-channel/lb-policies/priority.md)). |
 | Locality | The locality (region, zone, sub-zone). Used by `xds_cluster_impl` for load reporting and labels, and by `xds_wrr_locality`. |
-| Locality name string | `{region="<region>", zone="<zone>", sub_zone="<sub_zone>"}`. Used as the `grpc.lb.locality` label value by subchannel metrics (see [Metric Catalog](../../08-observability/metrics.md)). |
+| Locality name string | `{region="<region>", zone="<zone>", sub_zone="<sub_zone>"}`. Used as the `grpc.lb.locality` label value by subchannel metrics (see [Metric Catalog](../../08-observability/03-metrics.md)). |
 | Locality weight | The locality's `load_balancing_weight`. Used by `xds_wrr_locality`. |
-| Backend service | The cluster name. Used as the `grpc.lb.backend_service` label value by subchannel and TLS client metrics (see [Metric Catalog](../../08-observability/metrics.md)). |
-| Endpoint weight | Locality weight × endpoint weight ([Endpoint weight](#6-endpoint-weight)). Used by weighted policies such as `ring_hash`. |
-| HTTP CONNECT proxy | If the parsed cluster has `use_http_connect` set (its transport socket is `Http11ProxyUpstreamTransport`, see [resources/cluster.md](../resources/cluster.md)) and the endpoint has a proxy address (the parsed endpoint's `http_proxy_address`, from endpoint metadata, else locality metadata, key `envoy.http11_proxy_transport_socket.proxy_address`; see [resources/endpoint.md](../resources/endpoint.md)), attributes that make the subchannel connect through that proxy, with the endpoint's address as the CONNECT argument (see [HTTP CONNECT Proxy](../../04-client-channel/proxy.md)). If `use_http_connect` is not set, any proxy attribute MUST be removed. |
+| Backend service | The cluster name. Used as the `grpc.lb.backend_service` label value by subchannel and TLS client metrics (see [Metric Catalog](../../08-observability/03-metrics.md)). |
+| Endpoint weight | Locality weight × endpoint weight ([Endpoint weight](#8-endpoint-weight)). Used by weighted policies such as `ring_hash`. |
+| HTTP CONNECT proxy | If the parsed cluster has `use_http_connect` set (its transport socket is `Http11ProxyUpstreamTransport`, see [Cluster](../03-resources/04-cluster.md)) and the endpoint has a proxy address (the parsed endpoint's `http_proxy_address`, from endpoint metadata, else locality metadata, key `envoy.http11_proxy_transport_socket.proxy_address`; see [ClusterLoadAssignment and LbEndpointCollection](../03-resources/05-endpoint.md)), attributes that make the subchannel connect through that proxy, with the endpoint's address as the CONNECT argument (see [HTTP CONNECT Proxy](../../04-client-channel/07-proxy.md)). If `use_http_connect` is not set, any proxy attribute MUST be removed. |
 
 These attributes come from resource parsing (see
-[resources/endpoint.md](../resources/endpoint.md)) and are passed through
+[ClusterLoadAssignment and LbEndpointCollection](../03-resources/05-endpoint.md)) and are passed through
 unchanged:
 
 | Attribute | Value |
@@ -151,12 +212,12 @@ unchanged:
 | `hash_key` | The `hash_key` string from the endpoint's `envoy.lb` metadata, if present. Used by `ring_hash` to place the endpoint on the ring (see [ring_hash](../../04-client-channel/lb-policies/ring_hash.md)). |
 
 A LOGICAL_DNS cluster always produces a single endpoint containing all
-resolved addresses, in the empty locality (see [LOGICAL_DNS clusters](../client.md)).
+resolved addresses, in the empty locality (see [LOGICAL_DNS clusters](../04-client.md)).
 
-## 4. Child config for a non-aggregate cluster
+## 6. Child config for a non-aggregate cluster
 
 The `cds` policy generates this child config. `<xds_lb_policy>` is the
-cluster's converted LB policy config ([xDS LB Policies: xDS LB Policy Registry](../lb-policies.md#2-xds-lb-policy-registry)):
+cluster's converted LB policy config ([xDS LB Policies: xDS LB Policy Registry](../05-lb-policies.md#2-xds-lb-policy-registry)):
 
 ```json
 [ { "outlier_detection_experimental": {
@@ -180,7 +241,7 @@ cluster's converted LB policy config ([xDS LB Policies: xDS LB Policy Registry](
 ```
 
 - `priority`: one child per priority in the endpoint data, in priority order,
-  named as in [Priority child names](#2-priority-child-names). If the endpoint data is
+  named as in [Priority child names](#4-priority-child-names). If the endpoint data is
   missing (for example, after an EDS error) or has no priorities, there is
   exactly one priority with no endpoints. That priority reports
   TRANSIENT_FAILURE, which fails RPCs with the resolution note, and keeps an
@@ -212,9 +273,11 @@ cluster's converted LB policy config ([xDS LB Policies: xDS LB Policy Registry](
   `successRateEjection` is omitted when `enforcing_success_rate` is 0.
   `failurePercentageEjection` is omitted when `enforcing_failure_percentage` is
   0 or unset. Defaults and validation are in
-  [resources/cluster.md](../resources/cluster.md).
+  [Cluster](../03-resources/04-cluster.md).
 
-## 5. Child config for an aggregate cluster
+## 7. Child config for an aggregate cluster
+
+> **Introduced by:** [gRFC A37: xDS Aggregate and Logical DNS Clusters](https://github.com/grpc/proposal/blob/master/A37-xds-aggregate-and-logical-dns-clusters.md)
 
 ```json
 [ { "priority_experimental": {
@@ -230,7 +293,7 @@ order, each named by its leaf cluster name. `ignore_reresolution_requests` is
 false. The aggregate `cds` policy does not set endpoint attributes; each leaf
 `cds` does so for its own cluster.
 
-## 6. Endpoint weight
+## 8. Endpoint weight
 
 The endpoint weight attribute is the raw product:
 
@@ -240,14 +303,32 @@ endpoint_weight = locality.load_balancing_weight × endpoint_lb_weight
 
 where `endpoint_lb_weight` is the endpoint's `load_balancing_weight`, or 1 if
 it is unset (an explicit 0 is rejected when the EDS resource is validated; see
-[resources/endpoint.md](../resources/endpoint.md)). Localities with weight 0 or
+[ClusterLoadAssignment and LbEndpointCollection](../03-resources/05-endpoint.md)). Localities with weight 0 or
 unset are left out of the parsed resource, so both factors are at least 1. For
 a LOGICAL_DNS cluster, both weights are 1.
 <!-- REVIEW(divergence) [XDS_LB-1]: overflow of locality weight × endpoint weight (no gRFC covers it). Java: computes the product in a 64-bit long weight attribute (no overflow; uint32 values ≥ 2^31 are sign-extended) (CdsLoadBalancer2.java); Go: uint32 × uint32, wraps mod 2^32 (cdsbalancer/configbuilder.go); C++: uint32 × uint32, wraps mod 2^32, then stored in an int arg (load_balancing/xds/cds.cc). spec says: saturate at max uint32 (none does this; wrapping is clearly a bug). -->
 If the product exceeds the maximum uint32 value, it MUST be capped at that
 value.
 
-## 7. API Requirements
+## 9. LB Policy API
+
+The `cds` policy implements the generic
+[LB Policy API](../../04-client-channel/05-load-balancing.md#4-lb-policy-api) and
+uses the [Helper API](../../04-client-channel/05-load-balancing.md#5-helper-api) as
+follows:
+
+| Operation | Behavior |
+| --- | --- |
+| `Update(update) → status` | Handled as in [Update handling](#3-update-handling): obtains a dynamic subscription if `isDynamic` is set, looks up `cluster` in the `XdsConfig` attribute, and creates or updates its child with the generated child config, endpoint list, resolution note, and attributes. A missing entry for a dynamic cluster is ignored; a missing entry for a non-dynamic cluster, or an error entry, makes the policy destroy its child (if any) and drop every RPC. The update's own endpoint list (always empty from the xds resolver) is not used; endpoints come from the `XdsConfig`. When the policy updates its child, it returns the child's status. |
+| `ExitIdle()` | Forwarded to the child, if any. |
+| `ResetBackoff()` | Forwarded to the child, if any. |
+| `Shutdown()` | Shuts down the child, if any, and releases the dynamic cluster subscription, if it holds one. |
+| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its descendants do. |
+| Child `UpdateState(state, status, picker)` | Reports the child's state and status unchanged. For a non-aggregate cluster, it wraps the child's picker so that every pick sets the `grpc.lb.backend_service` label ([Update handling](#3-update-handling)); for an aggregate cluster, it reports the child's picker unchanged. |
+| Child `RequestReresolution()` | Re-resolution requests from the child are forwarded to the channel. |
+| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
+
+## 10. API Requirements
 
 - gRPC MUST register this policy in the LB policy registry under the name `cds_experimental` so that the configuration generated by the xDS client data plane can select it.
-- This policy is internal to xDS support. Applications are not expected to configure it directly, and gRPC is not required to provide any public API specific to it beyond the general LB policy API requirements in [xDS LB Policies: API Requirements](../lb-policies.md#3-api-requirements).
+- This policy is internal to xDS support. Applications are not expected to configure it directly, and gRPC is not required to provide any public API specific to it beyond the general LB policy API requirements in [xDS LB Policies: API Requirements](../05-lb-policies.md#3-api-requirements).

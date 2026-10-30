@@ -11,12 +11,15 @@
 > `random_subsetting_experimental`. Its name and configuration are not yet
 > stable.
 
-## 1. Purpose
+> **Introduced by:** [gRFC A68: Random subsetting with rendezvous hashing LB policy.](https://github.com/grpc/proposal/blob/master/A68-random-subsetting.md)
 
-`random_subsetting` picks a subset of `subsetSize` endpoints from the
-endpoint list and passes only that subset to its child policy. Clients
-then connect to a bounded number of servers. Connections are spread
-across servers nearly uniformly when
+## 1. Overview
+
+`random_subsetting` is a parent policy with one child (see
+[Policy Hierarchy](../05-load-balancing.md#9-policy-hierarchy)). It picks a
+subset of `subsetSize` endpoints from the endpoint list and passes only
+that subset to its child policy. Clients then connect to a bounded number
+of servers. Connections are spread across servers nearly uniformly when
 `(number of clients × subsetSize) / number of servers` is large. The
 policy uses rendezvous hashing, so adding or removing one server changes
 at most one entry in each client's subset.
@@ -37,10 +40,17 @@ Proto: `RandomSubsettingLoadBalancingConfig` in
 }
 ```
 
-| Field (JSON) | Type | Validation |
-| --- | --- | --- |
-| `subsetSize` | uint32 | Required. MUST be greater than 0. |
-| `childPolicy` | `LoadBalancingConfig` list | Required. Resolved as specified in [../load-balancing.md](../load-balancing.md). The config is invalid if the list is missing or invalid. |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `subsetSize` | uint32 | Yes | — | Number of endpoints in the subset passed to the child. MUST be greater than 0. |
+| `childPolicy` | LoadBalancingConfig list | Yes | — | The child policy. Resolved as specified in [LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration). |
+
+### 2.1 Validation
+
+The config is invalid if any of the following holds:
+
+- `subsetSize` is missing or 0.
+- `childPolicy` is missing or invalid.
 
 ## 3. Behavior
 
@@ -68,10 +78,26 @@ Everything else is passed straight through: the child's state and picker
 reports, its re-resolution requests, and `ExitIdle()`, `ResetBackoff()`,
 and `Shutdown()`. The policy creates no subchannels of its own.
 
-## 4. API Requirements
+## 4. LB Policy API
+
+`random_subsetting` implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+
+| Operation | Behavior |
+| --- | --- |
+| `Update(update) → status` | Computes the subset and sends the child an update containing the subset, the child config, the top-level attributes, and the resolution note ([Behavior](#3-behavior)). If the endpoints field is an error, the error is passed to the child in place of the subset. If the child's policy name changes, the child is replaced using the procedure in [Gracefully Switching LB Policies](../05-load-balancing.md#12-gracefully-switching-lb-policies). Returns the child's status. |
+| `ExitIdle()` | Forwarded to the child. |
+| `ResetBackoff()` | Forwarded to the child. |
+| `Shutdown()` | Shuts down the child. |
+| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its child does. |
+| Child `UpdateState(state, status, picker)` | Passed through to the policy's own helper unchanged. |
+| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
+| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
+
+## 5. API Requirements
 
 - gRPC MUST register this policy under the name
   `random_subsetting_experimental`, so that it can be selected through
   `loadBalancingConfig` in the service config and used as a child by other
   policies, including custom ones
-  ([../load-balancing.md](../load-balancing.md)).
+  ([Load Balancing](../05-load-balancing.md)).

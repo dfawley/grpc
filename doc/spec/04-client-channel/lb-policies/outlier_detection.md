@@ -11,15 +11,18 @@
 > `outlier_detection_experimental`. Its name and configuration are not
 > yet stable.
 
-## 1. Purpose
+> **Introduced by:** [gRFC A50: gRPC xDS Outlier Detection Support](https://github.com/grpc/proposal/blob/master/A50-xds-outlier-detection.md)
 
-`outlier_detection` is a parent policy with one child. It watches the
-results of calls that the child sends to each endpoint, and temporarily
-**ejects** endpoints whose error rates are outliers. An ejected endpoint
-is reported unhealthy to the child through the generic health watch
-([../load-balancing.md](../load-balancing.md)), so the child stops
-using it. The endpoint's connections are kept open, so that it can be
-used again immediately when it is un-ejected.
+## 1. Overview
+
+`outlier_detection` is a parent policy with one child (see
+[Policy Hierarchy](../05-load-balancing.md#9-policy-hierarchy)). It watches
+the results of calls that the child sends to each endpoint, and
+temporarily **ejects** endpoints whose error rates are outliers. An
+ejected endpoint is reported unhealthy to the child through the generic
+health watch ([Generic Health Reporting](../05-load-balancing.md#10-generic-health-reporting)),
+so the child stops using it. The endpoint's connections are kept open,
+so that it can be used again immediately when it is un-ejected.
 
 Ejection decisions are per endpoint: calls sent to any address of an
 endpoint count toward that endpoint, and ejecting the endpoint affects
@@ -29,7 +32,7 @@ that consume the health state. That means petiole policies, through their
 used directly.
 
 The policy is not xDS-specific. For how xDS configures it, see
-[../../09-xds/lb-policies.md](../../09-xds/lb-policies.md).
+[xDS LB Policies](../../09-xds/05-lb-policies.md).
 
 Registered name: `outlier_detection_experimental`.
 
@@ -58,23 +61,23 @@ Proto: `OutlierDetectionLoadBalancingConfig` in
 }
 ```
 
-| Field (JSON) | Type | Default | Description |
-| --- | --- | --- | --- |
-| `interval` | Duration | 10 s | Time between ejection-analysis sweeps. |
-| `baseEjectionTime` | Duration | 30 s | Base ejection duration. The actual duration is this multiplied by the endpoint's ejection multiplier. |
-| `maxEjectionTime` | Duration | max(300 s, `baseEjectionTime`) | Upper bound on ejection duration. |
-| `maxEjectionPercent` | uint32 | 10 | Maximum percentage of endpoints that can be ejected at once. Ejection never takes the ejected percentage above this value, so `0` disables ejection. |
-| `successRateEjection` | object | unset | If set, run the success-rate algorithm. |
-| `successRateEjection.stdevFactor` | uint32 | 1900 | Ejection threshold factor, in thousandths (1900 means 1.9). |
-| `successRateEjection.enforcementPercentage` | uint32 | 100 | Percent chance of actually ejecting a detected outlier. |
-| `successRateEjection.minimumHosts` | uint32 | 5 | Minimum number of endpoints with enough volume to run the algorithm. |
-| `successRateEjection.requestVolume` | uint32 | 100 | Minimum calls in an interval for an endpoint to be considered. |
-| `failurePercentageEjection` | object | unset | If set, run the failure-percentage algorithm. |
-| `failurePercentageEjection.threshold` | uint32 | 85 | Failure percentage above which an endpoint is an outlier. |
-| `failurePercentageEjection.enforcementPercentage` | uint32 | 100 | Percent chance of actually ejecting a detected outlier. |
-| `failurePercentageEjection.minimumHosts` | uint32 | 5 | Minimum number of endpoints with enough volume to run the algorithm. |
-| `failurePercentageEjection.requestVolume` | uint32 | 50 | Minimum calls in an interval for an endpoint to be considered. |
-| `childPolicy` | `LoadBalancingConfig` list | — | Required. The child policy. |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `interval` | Duration | No | 10 s | Time between ejection-analysis sweeps. |
+| `baseEjectionTime` | Duration | No | 30 s | Base ejection duration. The actual duration is this multiplied by the endpoint's ejection multiplier. |
+| `maxEjectionTime` | Duration | No | max(300 s, `baseEjectionTime`) | Upper bound on ejection duration. |
+| `maxEjectionPercent` | uint32 | No | 10 | Maximum percentage of endpoints that can be ejected at once. Ejection never takes the ejected percentage above this value, so `0` disables ejection. MUST be at most 100. |
+| `successRateEjection` | object | No | — | If set, run the success-rate algorithm. If unset, the algorithm is not run. |
+| `successRateEjection.stdevFactor` | uint32 | No | 1900 | Ejection threshold factor, in thousandths (1900 means 1.9). |
+| `successRateEjection.enforcementPercentage` | uint32 | No | 100 | Percent chance of actually ejecting a detected outlier. MUST be at most 100. |
+| `successRateEjection.minimumHosts` | uint32 | No | 5 | Minimum number of endpoints with enough volume to run the algorithm. |
+| `successRateEjection.requestVolume` | uint32 | No | 100 | Minimum calls in an interval for an endpoint to be considered. |
+| `failurePercentageEjection` | object | No | — | If set, run the failure-percentage algorithm. If unset, the algorithm is not run. |
+| `failurePercentageEjection.threshold` | uint32 | No | 85 | Failure percentage above which an endpoint is an outlier. MUST be at most 100. |
+| `failurePercentageEjection.enforcementPercentage` | uint32 | No | 100 | Percent chance of actually ejecting a detected outlier. MUST be at most 100. |
+| `failurePercentageEjection.minimumHosts` | uint32 | No | 5 | Minimum number of endpoints with enough volume to run the algorithm. |
+| `failurePercentageEjection.requestVolume` | uint32 | No | 50 | Minimum calls in an interval for an endpoint to be considered. |
+| `childPolicy` | LoadBalancingConfig list | Yes | — | The child policy. |
 
 ### 2.1 Validation
 
@@ -86,7 +89,7 @@ The config is invalid if any of the following holds:
   `failurePercentageEjection.threshold`, or
   `failurePercentageEjection.enforcementPercentage` is greater than 100.
 - `childPolicy` is missing or invalid (see
-  [../load-balancing.md](../load-balancing.md)).
+  [LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration)).
 
 If both `successRateEjection` and `failurePercentageEjection` are unset,
 outlier detection is disabled: the policy passes everything through and
@@ -218,10 +221,21 @@ for e in candidates:
 `random_int(0, 100)` is uniform over `[0, 100)`. Endpoints that are
 already ejected are not ejected again.
 
-## 7. Other Operations
+## 7. LB Policy API
 
-`ExitIdle()`, `ResetBackoff()`, and re-resolution requests pass straight
-through to and from the child.
+`outlier_detection` implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+
+| Operation | Behavior |
+| --- | --- |
+| `Update(update) → status` | Rebuilds the endpoint and subchannel maps ([State](#3-state)), starts, restarts, or cancels the ejection timer according to the new config ([Ejection Timer](#6-ejection-timer)), and passes the update to the child unchanged. If the endpoints field is an error, the maps are left unchanged and the error is passed to the child. If the child's policy name changes, the child is replaced using the procedure in [Gracefully Switching LB Policies](../05-load-balancing.md#12-gracefully-switching-lb-policies). Returns the child's status. |
+| `ExitIdle()` | Forwarded to the child. |
+| `ResetBackoff()` | Forwarded to the child. |
+| `Shutdown()` | Cancels the ejection timer and shuts down the child. |
+| Subchannel connectivity / health updates | The policy wraps every subchannel the child creates ([Subchannel Wrapping and Ejection](#4-subchannel-wrapping-and-ejection)). Raw connectivity updates pass through the wrapper to the child unchanged. Health updates pass through unchanged while the endpoint is not ejected; while it is ejected, the wrapper reports TRANSIENT_FAILURE instead. |
+| Child `UpdateState(state, status, picker)` | Reports the child's state and status unchanged, with a picker that wraps the child's picker to count call results ([Picker and Call Counting](#5-picker-and-call-counting)). |
+| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
+| Child `CreateSubchannel(address, attributes)` | Creates the subchannel through the policy's own helper, wraps it, and adds the wrapper to the subchannel map entry for its address. The wrapper starts out ejected if the address's endpoint is currently ejected ([Subchannel Wrapping and Ejection](#4-subchannel-wrapping-and-ejection)). |
 
 ## 8. API Requirements
 
@@ -229,4 +243,4 @@ through to and from the child.
   `outlier_detection_experimental`, so that it can be selected through
   `loadBalancingConfig` in the service config and used as a child by other
   policies, including custom ones
-  ([../load-balancing.md](../load-balancing.md)).
+  ([Load Balancing](../05-load-balancing.md)).

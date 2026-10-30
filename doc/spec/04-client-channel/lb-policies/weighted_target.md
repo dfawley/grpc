@@ -11,12 +11,15 @@
 > `weighted_target_experimental`. Its name and configuration are not yet
 > stable.
 
-## 1. Purpose
+> **Introduced by:** [gRFC A28: gRPC xDS traffic splitting and routing](https://github.com/grpc/proposal/blob/master/A28-xds-traffic-splitting-and-routing.md)
 
-`weighted_target` is a parent policy with named, weighted children. It
-spreads calls randomly across its READY children in proportion to their
-weights. xDS uses it to pick a locality within a priority (see
-[../../09-xds/lb-policies.md](../../09-xds/lb-policies.md)), but it is
+## 1. Overview
+
+`weighted_target` is a parent policy (see
+[Policy Hierarchy](../05-load-balancing.md#9-policy-hierarchy)) with named,
+weighted children. It spreads calls randomly across its READY children in
+proportion to their weights. xDS uses it to pick a locality within a
+priority (see [xDS LB Policies](../../09-xds/05-lb-policies.md)), but it is
 not xDS-specific. Only READY children get calls when any child is READY.
 This differs from Envoy's weighted clusters, which also count children
 that are not READY.
@@ -39,18 +42,30 @@ Proto: `WeightedTargetLoadBalancingPolicyConfig` in
 }
 ```
 
-| Field (JSON) | Type | Validation |
-| --- | --- | --- |
-| `targets` | map of name → Target | The children. The name is the child's identity across updates. |
-| `targets[].weight` | uint32 | Required. MUST be greater than 0. A missing or zero weight makes the config invalid. |
-| `targets[].childPolicy` | `LoadBalancingConfig` list | Required. Resolved as specified in [../load-balancing.md](../load-balancing.md). |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `targets` | map of string → object | No | empty map | The children. The map key is the child's name, which is its identity across updates. |
+| `targets{}.weight` | uint32 | Yes | — | The child's weight. MUST be greater than 0. |
+| `targets{}.childPolicy` | `LoadBalancingConfig list` | Yes | — | The child's policy. Resolved as specified in [LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration). |
+
+### 2.1 Validation
+
+The config is invalid, and is rejected as specified in
+[LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration),
+if any of the following holds:
+
+- A target's `weight` is missing or zero.
+- A target's `childPolicy` is missing, or is an invalid
+  `LoadBalancingConfig` list (no entry names a registered policy, or the
+  selected policy rejects its config).
 
 ## 3. Updates and Child Management
 
 On each update, the policy:
 
 1. Splits the endpoints by hierarchical path (the first path element is
-   the target name, removed before passing down).
+   the target name, removed before passing down; see
+   [Hierarchical Address Paths](../05-load-balancing.md#94-hierarchical-address-paths)).
 2. For each target in the config, creates the child if needed, or
    updates the existing child of that name. The update contains the
    child's config, its endpoints, the resolution note, and the
@@ -86,7 +101,7 @@ chosen child's picker. In CONNECTING and IDLE, it queues:
 | --- | --- | --- |
 | READY | READY children | Weighted random choice, delegated to the child's picker. |
 | CONNECTING | — | Queue. |
-| IDLE | — | Queue. The picker MUST also schedule a call to the policy's `ExitIdle()`, which is forwarded to all children (see [../load-balancing.md](../load-balancing.md)), so that IDLE children are not left idle with RPCs queued. |
+| IDLE | — | Queue. The picker MUST also schedule a call to the policy's `ExitIdle()`, which is forwarded to all children (see [Triggering Work From a Picker](../05-load-balancing.md#63-triggering-work-from-a-picker)), so that IDLE children are not left idle with RPCs queued. |
 | TRANSIENT_FAILURE | TRANSIENT_FAILURE children | Weighted random choice, delegated, so that the call fails with a child's error. If there are no children, fail with `UNAVAILABLE` and a message saying that there are no children. |
 
 ```
@@ -102,12 +117,23 @@ Pick(args):
   return c.picker.Pick(args)
 ```
 
-## 6. Other Operations
+## 6. LB Policy API
 
-- **Re-resolution:** forward children's requests to the parent.
-- **`ExitIdle()`:** forward to all children.
-- **`ResetBackoff()`:** forward to all children.
-- **`Shutdown()`:** delete all children.
+The policy implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) and the
+[Helper API](../05-load-balancing.md#5-helper-api) it provides to its
+children as follows:
+
+| Operation | Behavior |
+| --- | --- |
+| `Update(update) → status` | Creates, updates, and deletes children by target name and routes endpoints to them by hierarchical path, then reports its state and picker once ([Updates and Child Management](#3-updates-and-child-management)). Each child receives the resolution note and the top-level attributes plus the locality-name attribute. If the endpoints field is an error, the error is passed to every child. Returns a status that combines the children's statuses. |
+| `ExitIdle()` | Forwarded to all children. |
+| `ResetBackoff()` | Forwarded to all children. |
+| `Shutdown()` | Deletes all children. |
+| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its children do. |
+| Child `UpdateState(state, status, picker)` | Records the child's state and picker, recomputes the aggregate state ([Connectivity State](#4-connectivity-state)), and reports a new picker ([Picker](#5-picker)). While an update is being applied to the children, the aggregate is reported only once, after all children are updated. |
+| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
+| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
 
 ## 7. API Requirements
 
@@ -115,4 +141,4 @@ Pick(args):
   `weighted_target_experimental`, so that it can be selected through
   `loadBalancingConfig` in the service config and used as a child by other
   policies, including custom ones
-  ([../load-balancing.md](../load-balancing.md)).
+  ([Load Balancing](../05-load-balancing.md)).

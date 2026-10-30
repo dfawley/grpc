@@ -9,7 +9,7 @@
 
 This section defines the semantics of gRPC RPCs independently of any
 transport. The mapping of these concepts onto HTTP/2 is defined in
-[gRPC over HTTP/2](../03-wire-protocol/http2.md). Implementations SHOULD
+[gRPC over HTTP/2](../03-wire-protocol/01-http2.md). Implementations SHOULD
 support the HTTP/2 transport, because it is the basis for interoperability.
 
 ## 1. Channels and Servers
@@ -77,7 +77,7 @@ full-method-name = full-service-name "/" short-method-name
 
 The **full service name** is defined by the IDL. For Protocol Buffers it is
 the package name, a `.`, and the service name, or only the service name if
-there is no package (see [Protocol Buffers Mapping](../03-wire-protocol/protobuf.md)). Full method
+there is no package (see [Protocol Buffers Mapping](../03-wire-protocol/05-protobuf.md)). Full method
 names are case-sensitive. They MUST consist only of ASCII characters that are
 valid in HTTP/2 header values (see [Internationalization](#77-internationalization)). The
 short method name MUST NOT contain `/`. On HTTP/2 the full method name appears
@@ -90,7 +90,7 @@ RPCs, or **calls**, are started by a client to a server, usually through a
 channel. Several servers might be able to receive a call (for example, behind
 a load balancer), but only one server processes any one call. Call attempts
 created by retries or hedging are a separate concept; see
-[Retries and Hedging](../04-client-channel/retries.md).
+[Retries and Hedging](../04-client-channel/10-retries.md).
 
 ### 3.1 Two Independent Streams
 
@@ -157,7 +157,7 @@ server application completes the call with a status before headers or any
 response message are sent, the server SHOULD send trailers-only.
 
 Note: Receiving response headers commits a call on the client, so it can no
-longer be retried (see [Retries and Hedging](../04-client-channel/retries.md)). Delaying headers
+longer be retried (see [Retries and Hedging](../04-client-channel/10-retries.md)). Delaying headers
 keeps calls retryable for longer.
 
 ## 4. Cancellation
@@ -207,7 +207,7 @@ too much.
 
 Flow control is local to each call and is not visible on other calls. Transport
 flow control (for example HTTP/2 stream and connection windows) is specified in
-[HTTP/2 Transport Behavior](../03-wire-protocol/http2-transport.md).
+[HTTP/2 Transport Behavior](../03-wire-protocol/02-http2-transport.md).
 
 ## 6. Unary Calls
 
@@ -257,8 +257,8 @@ headers, response headers, and trailers.
   or trailing whitespace, implementations MAY strip it.
 - **Binary values** are arbitrary byte sequences. The wire encoding (for
   example, base64 on HTTP/2) is handled by the implementation and is
-  transparent to applications. See [gRPC over HTTP/2](../03-wire-protocol/http2.md) and
-  [True Binary Metadata](../03-wire-protocol/true-binary-metadata.md).
+  transparent to applications. See [gRPC over HTTP/2](../03-wire-protocol/01-http2.md) and
+  [True Binary Metadata](../03-wire-protocol/03-true-binary-metadata.md).
 - If an implementation receives an ASCII value outside the gRPC character range
   but valid as an HTTP field value, it MUST NOT fail the call. It MAY discard
   the value or accept it. If it accepts the value, it MUST allow the application
@@ -294,7 +294,7 @@ trailers-only response, the metadata is trailing metadata.
   metadata.
 - Transport-level headers (for example HTTP/2 pseudo-headers, `content-type`,
   `te`, and connection-specific headers) are not application metadata. The
-  rules for them are in [gRPC over HTTP/2](../03-wire-protocol/http2.md).
+  rules for them are in [gRPC over HTTP/2](../03-wire-protocol/01-http2.md).
 - Every key with a gRPC-defined meaning is listed in
   [Appendix A](../appendices/a-metadata-keys.md).
 
@@ -324,7 +324,7 @@ configurable through the channel and server APIs.
 A server that receives request headers over its limit SHOULD fail the call with
 `RESOURCE_EXHAUSTED`. A client that receives response headers or trailers over
 its limit SHOULD fail the call with `RESOURCE_EXHAUSTED`. Transport-level
-enforcement is specified in [HTTP/2 Transport Behavior](../03-wire-protocol/http2-transport.md).
+enforcement is specified in [HTTP/2 Transport Behavior](../03-wire-protocol/02-http2-transport.md).
 
 ### 7.7 Internationalization
 
@@ -332,7 +332,7 @@ enforcement is specified in [HTTP/2 Transport Behavior](../03-wire-protocol/http
 |---------|-----------------|-------|
 | Method name | ASCII only; characters allowed in HTTP/2 header values | No encoding or decoding is applied. |
 | Host name / authority | ASCII; internationalized names in punycode | The application is responsible for punycode-encoding an internationalized host name. |
-| Status message | Any Unicode string | Encoded on the wire as UTF-8 followed by percent-encoding (see [gRPC over HTTP/2](../03-wire-protocol/http2.md)). APIs SHOULD represent it as a Unicode string. |
+| Status message | Any Unicode string | Encoded on the wire as UTF-8 followed by percent-encoding (see [gRPC over HTTP/2](../03-wire-protocol/01-http2.md)). APIs SHOULD represent it as a Unicode string. |
 | Metadata key | As defined in [Keys](#71-keys) | |
 | ASCII metadata value | As defined in [Values](#72-values) | Non-ASCII data MUST be sent with a binary (`-bin`) key or encoded by the application. |
 | Binary metadata value | Arbitrary bytes | |
@@ -353,7 +353,7 @@ The deadline used for a call is the earliest of:
   `timeout` field in the service config (`grpc/service_config/service_config.proto`,
   a `google.protobuf.Duration`, JSON string such as `"1.5s"`) or a timeout
   supplied by a ConfigSelector, such as the xDS route `max_stream_duration`
-  (see [Per-call Configuration and Call Flow](../04-client-channel/call-dispatch.md) and [Client Data Plane](../09-xds/client.md)).
+  (see [Per-call Configuration and Call Flow](../04-client-channel/04-call-dispatch.md) and [Client Data Plane](../09-xds/04-client.md)).
 
 If only one is set, that one is used. If neither is set, the call has no
 deadline.
@@ -366,7 +366,7 @@ connection, every retry or hedging attempt, and backoff between attempts.
 If a call has a deadline, the client MUST include it in the request headers.
 It is sent as a **timeout**: the time remaining until the deadline when the
 headers are sent. A duration avoids the need for synchronized clocks. The
-encoding (`grpc-timeout`) is defined in [gRPC over HTTP/2](../03-wire-protocol/http2.md). A
+encoding (`grpc-timeout`) is defined in [gRPC over HTTP/2](../03-wire-protocol/01-http2.md). A
 server that receives no timeout MUST treat the call as having no deadline.
 
 Both client and server MUST track the deadline:
@@ -378,7 +378,7 @@ Both client and server MUST track the deadline:
   already sent trailers, the server MAY send trailers with status
   `DEADLINE_EXCEEDED`. If it does not, it MUST abort the stream (on HTTP/2,
   `RST_STREAM` with `CANCEL`) if the stream is not already closed. See
-  [gRPC over HTTP/2](../03-wire-protocol/http2.md).
+  [gRPC over HTTP/2](../03-wire-protocol/01-http2.md).
 - If the deadline has already passed when the client application starts the
   call, the client MUST fail the call with `DEADLINE_EXCEEDED` without sending
   it.
@@ -413,12 +413,12 @@ the server MUST make it available to the server application as part of the
 request headers. On HTTP/2 this is the `:authority` pseudo-header.
 
 By default the channel chooses the authority from the target (see
-[Channel](../04-client-channel/channel.md)). The client API MUST provide a way to
+[Channel](../04-client-channel/01-channel.md)). The client API MUST provide a way to
 override the authority per call. When the connection is secured, the
 overriding authority MUST, by default, be validated against the server's
 identity before the call is sent (credentials may provide an option to disable
 this check). If validation fails, the call fails with `UNAVAILABLE`. See
-[TLS](../06-security/tls.md).
+[TLS](../06-security/01-tls.md).
 
 ## 10. Status
 
@@ -464,7 +464,7 @@ unchanged if its API can represent it, and otherwise MUST convert it to
 Only the server application decides that a call ends with `OK`. Implementations
 MUST NOT fabricate an `OK` status. They may only pass on an `OK` status that was
 given to them. For example, a client that receives a response without a status
-MUST NOT report `OK` (see [gRPC over HTTP/2](../03-wire-protocol/http2.md) for how such
+MUST NOT report `OK` (see [gRPC over HTTP/2](../03-wire-protocol/01-http2.md) for how such
 responses are mapped).
 
 ### 10.3 Status Codes Generated by gRPC
@@ -518,13 +518,13 @@ fault injection), so these restrictions do not apply to them. Status codes
 from the control plane are restricted further in [Status Codes from the Control Plane](#106-status-codes-from-the-control-plane).
 
 The mapping from HTTP/2 stream errors and HTTP status codes to gRPC status
-codes is defined in [gRPC over HTTP/2](../03-wire-protocol/http2.md).
+codes is defined in [gRPC over HTTP/2](../03-wire-protocol/01-http2.md).
 
 ### 10.4 Status Message
 
 The status message is a Unicode string. It is meant for developer debugging,
 not for display to end users or for programmatic interpretation. On the wire it
-is UTF-8 encoded and then percent-encoded (see [gRPC over HTTP/2](../03-wire-protocol/http2.md)).
+is UTF-8 encoded and then percent-encoded (see [gRPC over HTTP/2](../03-wire-protocol/01-http2.md)).
 A receiver that decodes an invalid encoded message MUST NOT fail the call or
 discard the status because of it. At worst, it gives the application the raw
 encoded form.
@@ -600,7 +600,7 @@ message such as
 The same code can be generated by gRPC for different reasons and can also come
 from server applications. No fixed list of codes is safe to retry for every
 application. Service owners choose retryable codes for their methods; see
-[Retries and Hedging](../04-client-channel/retries.md).
+[Retries and Hedging](../04-client-channel/10-retries.md).
 
 ## 11. Ordering of Status, Reads, and Writes
 
@@ -668,7 +668,7 @@ applications avoid compression-based attacks such as CRIME and BEAST, and
 allows the two directions of a call to be compressed differently.
 
 Wire details (`grpc-encoding`, `grpc-accept-encoding`, and the per-message
-compressed flag) are defined in [gRPC over HTTP/2](../03-wire-protocol/http2.md).
+compressed flag) are defined in [gRPC over HTTP/2](../03-wire-protocol/01-http2.md).
 
 ### 13.1 Algorithms
 
@@ -794,8 +794,8 @@ the first resolver result, because the service config comes from that result.
 Only the application-set value affects that case.
 
 The behavior of each channel state is specified in
-[Channel](../04-client-channel/channel.md) and of each pick result in
-[Load Balancing](../04-client-channel/load-balancing.md).
+[Channel](../04-client-channel/01-channel.md) and of each pick result in
+[Load Balancing](../04-client-channel/05-load-balancing.md).
 
 ## 15. Idempotency and Retries
 
@@ -805,7 +805,7 @@ it knows that doing so is safe. Specifically:
 - gRPC MAY transparently retry an attempt that certainly did not reach the
   server application: one that never left the client, or one that the server
   transport refused before the application saw it. See
-  [Retries and Hedging](../04-client-channel/retries.md).
+  [Retries and Hedging](../04-client-channel/10-retries.md).
 - Any other retry or hedge happens only when the service owner configures a
   retry or hedging policy for the method (in the service config or through
   xDS). A retry policy lists which status codes are retryable. Hedging can make a
@@ -816,7 +816,7 @@ it knows that doing so is safe. Specifically:
 - Once a call is **committed** (the client received response headers, or the
   buffer for replaying messages overflowed), it is not retried.
 
-Retries and hedging are specified in [Retries and Hedging](../04-client-channel/retries.md).
+Retries and hedging are specified in [Retries and Hedging](../04-client-channel/10-retries.md).
 
 ## 16. Interceptors
 
@@ -848,11 +848,11 @@ run once per call regardless of retries.
 
 The ConfigSelector MAY also supply per-call interceptors (for example, to apply
 xDS HTTP filters). They run after the per-call configuration is chosen and
-before the retry layer. See [Per-call Configuration and Call Flow](../04-client-channel/call-dispatch.md) and
-[xDS HTTP Filters](../09-xds/http-filters.md).
+before the retry layer. See [Per-call Configuration and Call Flow](../04-client-channel/04-call-dispatch.md) and
+[xDS HTTP Filters](../09-xds/06-http-filters.md).
 
 Per-attempt observation is provided by attempt tracers rather than by
-interceptors. See [Instrumentation Architecture](../08-observability/instrumentation.md).
+interceptors. See [Instrumentation Architecture](../08-observability/01-instrumentation.md).
 
 ### 16.2 Server Interceptors
 
@@ -891,10 +891,10 @@ code and MAY fail calls with any status code.
 A **codec** serializes and deserializes messages. Every call uses one codec,
 identified by its **content-subtype**, a lowercase token. On HTTP/2 the
 content-subtype is carried in the `content-type` header as
-`application/grpc+<subtype>` (see [gRPC over HTTP/2](../03-wire-protocol/http2.md)).
+`application/grpc+<subtype>` (see [gRPC over HTTP/2](../03-wire-protocol/01-http2.md)).
 
 - The `proto` subtype is the Protocol Buffers binary encoding
-  ([Protocol Buffers Mapping](../03-wire-protocol/protobuf.md)). It is the default. A `content-type` of
+  ([Protocol Buffers Mapping](../03-wire-protocol/05-protobuf.md)). It is the default. A `content-type` of
   plain `application/grpc` MUST be treated as `application/grpc+proto`.
 - Other subtypes identify other codecs. Implementations MAY
   let applications register codecs by subtype.
@@ -903,7 +903,7 @@ content-subtype is carried in the `content-type` header as
   content-subtype.
 - A server that receives a content-subtype it has no codec for MAY fail the
   call with `UNIMPLEMENTED` (on HTTP/2, a gRPC status in the trailers, not an
-  HTTP error status; see [gRPC over HTTP/2](../03-wire-protocol/http2.md)). A
+  HTTP error status; see [gRPC over HTTP/2](../03-wire-protocol/01-http2.md)). A
   server that does not fail the call processes it with the method's default
   codec, as if no content-subtype had been sent.
 - Failures to deserialize a received message are `INTERNAL`
@@ -920,7 +920,7 @@ The client API MUST provide a way to:
    the following per-call options:
    - a deadline (absolute time) or timeout;
    - metadata to send in request headers;
-   - call credentials (see [Call Credentials](../06-security/call-credentials.md));
+   - call credentials (see [Call Credentials](../06-security/02-call-credentials.md));
    - the compression algorithm for request messages;
    - wait-for-ready;
    - an authority override ([Authority](#9-authority));
@@ -1005,7 +1005,7 @@ The status API MUST provide a way for:
 
 The following [ABNF](https://www.rfc-editor.org/rfc/rfc5234) describes the
 abstract structure of a call, ignoring cancellation. It is not a wire format;
-for the HTTP/2 encoding see [gRPC over HTTP/2](../03-wire-protocol/http2.md).
+for the HTTP/2 encoding see [gRPC over HTTP/2](../03-wire-protocol/01-http2.md).
 
 ```abnf
 call              = request-stream response-stream ; in parallel
@@ -1046,7 +1046,7 @@ Notes:
 
 - A response with no response headers and no messages consists of trailers
   only. On HTTP/2 this is sent as a `Trailers-Only` response
-  ([gRPC over HTTP/2](../03-wire-protocol/http2.md)).
+  ([gRPC over HTTP/2](../03-wire-protocol/01-http2.md)).
 - Senders SHOULD produce full method names and metadata that match this
   grammar. Receivers MAY be more lenient than the grammar. For example, a
   receiver may accept metadata values that contain bytes outside `SP / VCHAR`.

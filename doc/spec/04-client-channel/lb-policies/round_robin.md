@@ -7,24 +7,25 @@
 
 <!-- Sources: doc/load-balancing.md, grpc/service_config/service_config.proto (RoundRobinConfig), A61, A88 -->
 
-## 1. Purpose
+## 1. Overview
 
 `round_robin` spreads calls evenly across all endpoints by sending each
 successive call to the next READY endpoint. It is a petiole policy (see
-[../load-balancing.md](../load-balancing.md)): it creates one `pick_first`
-child per endpoint and tries to keep every endpoint connected at all
-times.
+[Load Balancing: Leaf, Parent, and Petiole Policies](../05-load-balancing.md#91-leaf-parent-and-petiole-policies)):
+it creates one `pick_first` child per endpoint and tries to keep every
+endpoint connected at all times.
 
 Registered name: `round_robin`.
 
 ## 2. Configuration
 
 Proto: `RoundRobinConfig` in `grpc/service_config/service_config.proto`.
-There are no fields.
 
 ```json
 { "round_robin": {} }
 ```
+
+The config has no fields; it MUST be an empty JSON object.
 
 ## 3. Updates and Endpoint Management
 
@@ -44,7 +45,7 @@ If several endpoints in the list have the same address set, the policy
 MAY collapse them into one child, OR leave them in place (one child per
 entry) if doing so does not cause extra connections, for example because
 the children's subchannels for the same address are shared (see
-[Subchannel Sharing](../subchannels.md#4-subchannel-sharing)). When repeated
+[Subchannel Sharing](../06-subchannels.md#4-subchannel-sharing)). When repeated
 endpoints are left in place, each entry gets its own share of picks.
 
 When a child reports IDLE, `round_robin` immediately calls the child's
@@ -59,8 +60,9 @@ includes the resolution note.
 
 `round_robin` aggregates the children's states with the normal rules,
 using both the sticky-TRANSIENT_FAILURE and IDLE-counts-as-CONNECTING
-variations ([../load-balancing.md](../load-balancing.md)). First match
-wins:
+variations
+([Load Balancing: Connectivity State Aggregation](../05-load-balancing.md#8-connectivity-state-aggregation)).
+First match wins:
 
 | Condition | Reported state | Picker |
 | --- | --- | --- |
@@ -85,15 +87,27 @@ Pick(args):
 Each new picker starts at a random index. The index MUST be updated
 atomically or under synchronization, because picks are concurrent.
 
-## 6. Re-resolution
+## 6. LB Policy API
 
-The `pick_first` children request re-resolution (see
-[pick_first.md](pick_first.md)). `round_robin` forwards those requests
-to its parent.
+`round_robin` implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) and the
+[Helper API](../05-load-balancing.md#5-helper-api) it provides to its
+children as follows:
+
+| Operation | Behavior |
+| --- | --- |
+| `Update(update) → status` | Creates, retains, and shuts down `pick_first` children by endpoint identity and sends each child its endpoint, then reports its state and picker once ([Updates and Endpoint Management](#3-updates-and-endpoint-management)). Each child receives its endpoint with that endpoint's attributes, plus the resolution note and the top-level attributes. An empty endpoint list, or an endpoint error with no previous list, shuts down all children, reports TRANSIENT_FAILURE, and returns `UNAVAILABLE`. An endpoint error with a previous list is ignored, and the existing children are kept. Returns OK in all other cases. |
+| `ExitIdle()` | No-op: the policy never reports IDLE, because it calls `ExitIdle()` on any child that reports IDLE. |
+| `ResetBackoff()` | Forwarded to all children. |
+| `Shutdown()` | Shuts down all children. |
+| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its `pick_first` children do. |
+| Child `UpdateState(state, status, picker)` | Records the child's state and picker. If the state is IDLE, calls the child's `ExitIdle()`. Recomputes the aggregate state ([Connectivity State](#4-connectivity-state)) and reports a new picker ([Picker](#5-picker)). While an update is being applied to the children, the aggregate is reported only once, after all children are updated. |
+| Child `RequestReresolution()` | The `pick_first` children request re-resolution (see [Re-resolution](pick_first.md#8-re-resolution)). `round_robin` forwards those requests to its own helper. |
+| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
 
 ## 7. API Requirements
 
 - gRPC MUST register this policy under the name `round_robin`, so that it
   can be selected through `loadBalancingConfig` in the service config and
   used as a child by other policies, including custom ones
-  ([../load-balancing.md](../load-balancing.md)).
+  ([Load Balancing](../05-load-balancing.md)).

@@ -20,7 +20,7 @@ when adding to or changing the specification.
 3. **Never call anything "optional".** Apart from the wire protocol, almost
    everything in gRPC is optional in practice. Observations about features that
    some implementations lack belong in
-   [spec-optionality-notes.md](../spec-optionality-notes.md), not in the spec.
+   [gRPC Spec: Optionality Notes](../spec-optionality-notes.md), not in the spec.
 4. **Experimental features** are included and marked with a line of the form
    `> **Experimental:** <what is experimental>` (for example, metrics marked
    experimental, or LB policies whose registered names end in `_experimental`).
@@ -70,9 +70,19 @@ when adding to or changing the specification.
   so on.
 - Never refer to sections by number across documents. Cross-references are
   relative links whose text is the target's title, e.g.
-  `[Connection Backoff](04-client-channel/subchannels.md#7-connection-backoff)`.
+  `[Connection Backoff](04-client-channel/06-subchannels.md#7-connection-backoff)`.
 - Index documents (READMEs and Load Balancing's policy list) list documents by
   name, unnumbered.
+- **File names.** Each top-level section is a directory named for its
+  two-digit section number, e.g. `04-client-channel/`, with its overview in
+  `README.md`. A numbered document inside a section is named
+  `NN-<name>.md`, where `NN` is the two-digit last component of the section
+  number in its H1: `# 4.9 Client-Side Backend Metrics (ORCA)` is
+  `04-client-channel/09-backend-metrics.md`. A numbered group of documents is a
+  directory named the same way (section 9.3 is `09-xds/03-resources/`).
+  Unnumbered documents keep plain names: LB policy documents (named after the
+  policy, in `lb-policies/` directories), appendices (`a-…` through `g-…`), and
+  `README.md` files. When a document is renumbered, rename its file to match.
 
 ## 4. LB Policy Documents
 
@@ -108,7 +118,7 @@ Every LB policy document (`04-client-channel/lb-policies/*.md` and
   policy document except that the current policy is bold and marked
   "(this policy)". It is followed by one sentence describing the policy's parent
   and children. When the tree changes, update it in every xDS policy document
-  and in [xDS LB Policies](09-xds/lb-policies.md).
+  and in [xDS LB Policies](09-xds/05-lb-policies.md).
 
 ### 4.2 Configuration
 
@@ -141,7 +151,7 @@ Configuration always appears as section 2, in this fixed layout:
 ### 4.3 LB Policy API
 
 States how the policy implements each operation of the generic LB policy API
-([Load Balancing](04-client-channel/load-balancing.md): LB Policy API, Helper
+([Load Balancing](04-client-channel/05-load-balancing.md): LB Policy API, Helper
 API, and Subchannel Interface for LB Policies), as a table with exactly these
 rows, in this order:
 
@@ -237,29 +247,31 @@ doc/spec/
   01-architecture/README.md               1. Architecture Overview
   02-rpc-semantics/README.md              2. Core RPC Semantics
   03-wire-protocol/                       3. Wire Protocol
-    http2.md, http2-transport.md, true-binary-metadata.md, http3.md, protobuf.md
+    01-http2.md, 02-http2-transport.md, 03-true-binary-metadata.md,
+    04-http3.md, 05-protobuf.md
   04-client-channel/                      4. Client Channel
-    channel.md, name-resolution.md, service-config.md, call-dispatch.md,
-    load-balancing.md, subchannels.md, proxy.md, health-checking.md,
-    backend-metrics.md, retries.md
+    01-channel.md, 02-name-resolution.md, 03-service-config.md,
+    04-call-dispatch.md, 05-load-balancing.md, 06-subchannels.md,
+    07-proxy.md, 08-health-checking.md, 09-backend-metrics.md, 10-retries.md
     lb-policies/                          General-purpose LB policies
       pick_first.md, round_robin.md, weighted_round_robin.md, least_request.md,
       ring_hash.md, random_subsetting.md, outlier_detection.md, priority.md,
       weighted_target.md, rls.md
   05-server/README.md                     5. Server
   06-security/                            6. Security
-    tls.md, call-credentials.md, authorization.md
+    01-tls.md, 02-call-credentials.md, 03-authorization.md
   07-services/                            7. Standard Services
-    health.md, reflection.md, orca.md, admin.md
+    01-health.md, 02-reflection.md, 03-orca.md, 04-admin.md
   08-observability/                       8. Observability
-    instrumentation.md, metrics-framework.md, metrics.md, tracing.md,
-    channelz.md, binary-logging.md
+    01-instrumentation.md, 02-metrics-framework.md, 03-metrics.md,
+    04-tracing.md, 05-channelz.md, 06-binary-logging.md
   09-xds/                                 9. xDS
-    bootstrap.md, xds-client.md, client.md, lb-policies.md, http-filters.md,
-    server.md, security.md, load-reporting.md, csds.md
-    resources/                            xDS resource types
-      common-types.md, listener.md, route-configuration.md, cluster.md,
-      endpoint.md
+    01-bootstrap.md, 02-xds-client.md, 04-client.md, 05-lb-policies.md,
+    06-http-filters.md, 07-server.md, 08-security.md, 09-load-reporting.md,
+    10-csds.md
+    03-resources/                         9.3 xDS resource types
+      01-common-types.md, 02-listener.md, 03-route-configuration.md,
+      04-cluster.md, 05-endpoint.md
     lb-policies/                          xDS LB policies
       xds_cluster_manager.md, cds.md, xds_cluster_impl.md,
       xds_override_host.md, xds_wrr_locality.md

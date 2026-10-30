@@ -10,26 +10,25 @@
 > **Experimental:** The policy is registered as `rls_experimental`. Its
 > name, configuration, and metrics are not yet stable.
 
-## 1. Purpose
+## 1. Overview
 
-`rls` (Route Lookup Service) is a parent policy that chooses a **target**
-for each RPC by asking an external lookup server. For each RPC it builds
-a key from the RPC's method and request headers, looks the key up in a
-local cache, and, on a cache miss, sends a `RouteLookup` RPC to the
-lookup server. The server answers with an ordered list of targets. The
-policy keeps one child policy per target and delegates the pick to the
-child for the chosen target.
+`rls` (Route Lookup Service) is a parent policy (see
+[Policy Hierarchy](../05-load-balancing.md#9-policy-hierarchy)) that chooses
+a **target** for each RPC by asking an external lookup server. For each
+RPC it builds a key from the RPC's method and request headers, looks the
+key up in a local cache, and, on a cache miss, sends a `RouteLookup` RPC
+to the lookup server. The server answers with an ordered list of targets.
+The policy keeps one child policy per target and delegates the pick to
+the child for the chosen target.
 
 The child policy is configured generically: the policy inserts the target
 name into a configured field of the child's config. With xDS, the RLS
 cluster specifier plugin configures `cds` as the child, so each target is
 an xDS cluster name (see
-[RouteConfiguration](../../09-xds/resources/route-configuration.md) and
-[Client Data Plane](../../09-xds/client.md)). The policy is not
+[RouteConfiguration](../../09-xds/03-resources/03-route-configuration.md) and
+[Client Data Plane](../../09-xds/04-client.md)). The policy is not
 xDS-specific; it can also be selected through `loadBalancingConfig` in a
 service config.
-
-Registered name: `rls_experimental`.
 
 ```mermaid
 flowchart TD
@@ -40,6 +39,8 @@ flowchart TD
   E --> T
   C -->|"in backoff"| D["default target child, or fail"]
 ```
+
+Registered name: `rls_experimental`.
 
 ## 2. Configuration
 
@@ -54,15 +55,21 @@ proto3 JSON form.
     "routeLookupConfig": {
       "grpcKeybuilders": [ {
         "names": [ { "service": "example.Service", "method": "Get" } ],
-        "headers": [ { "key": "user", "names": [ "x-user-id", "x-user" ] } ],
+        "headers": [ {
+          "key": "user",
+          "names": [ "x-user-id", "x-user" ],
+          "requiredMatch": false
+        } ],
         "extraKeys": { "host": "host", "service": "svc", "method": "mth" },
         "constantKeys": { "builder": "get" }
       } ],
+      "httpKeybuilders": [],
       "lookupService": "dns:///lookup.example.com",
       "lookupServiceTimeout": "2s",
       "maxAge": "300s",
       "staleAge": "240s",
       "cacheSizeBytes": "1048576",
+      "validTargets": [],
       "defaultTarget": "default-target"
     },
     "routeLookupChannelServiceConfig": { "loadBalancingConfig": [ { "round_robin": {} } ] },
@@ -72,49 +79,54 @@ proto3 JSON form.
 }
 ```
 
-### 2.1 Top-Level Fields
-
-| Field (JSON) | Type | Validation |
-| --- | --- | --- |
-| `routeLookupConfig` | `RouteLookupConfig` | Required. Validated as in [`routeLookupConfig`](#22-routelookupconfig). |
-| `childPolicy` | `LoadBalancingConfig` list | Required. Each entry MUST be an object with exactly one field (the policy name) whose value is an object; otherwise the config is invalid. The first entry whose policy is registered is selected, as for any `loadBalancingConfig` list ([Load Balancing](../load-balancing.md)). If none is registered, the config is invalid. The selected entry is validated at parse time with `childPolicyConfigTargetFieldName` set to a placeholder string (the `defaultTarget`, if set, MAY be used as the placeholder). If the selected child policy rejects that config, the RLS config is invalid. |
-| `childPolicyConfigTargetFieldName` | string | Required, non-empty. The name of the field in the child's config that receives the target name ([Child Policies](#7-child-policies)). |
-| `routeLookupChannelServiceConfig` | `ServiceConfig` (JSON object) | Optional. If present, it MUST be a valid service config; otherwise the RLS config is invalid. It is the service config of the control channel ([Control Channel](#4-control-channel)). |
-
-Unknown fields are ignored at every level.
-
-### 2.2 `routeLookupConfig`
-
-| Field (JSON) | Type | Default | Validation and meaning |
-| --- | --- | --- | --- |
-| `grpcKeybuilders` | list of `GrpcKeyBuilder` | | MUST be non-empty. See [`grpcKeybuilders`](#23-grpckeybuilders). |
-| `httpKeybuilders` | list | | Ignored. |
-| `lookupService` | string | | Required, non-empty. MUST be a valid target URI for a gRPC channel whose scheme has a registered resolver ([Name Resolution](../name-resolution.md)). The target of the control channel. |
-| `lookupServiceTimeout` | `Duration` | 10s | Deadline of each `RouteLookup` RPC. Zero or unset means the default. A negative value makes the config invalid. |
-| `maxAge` | `Duration` | 5 minutes | How long a successful response stays usable. Zero or unset means the default. If `staleAge` is not set, values above 5 minutes are clamped to 5 minutes. If `staleAge` is set, `maxAge` is not clamped. |
-| `staleAge` | `Duration` | 5 minutes | Age after which a still-valid response is refreshed in the background. If set, `maxAge` MUST also be set; otherwise the config is invalid. Values above 5 minutes are clamped to 5 minutes. After clamping, if `staleAge` is greater than `maxAge`, `staleAge` is set to `maxAge`. |
-| `cacheSizeBytes` | int64 | | MUST be greater than 0; otherwise the config is invalid. Values above 5,242,880 (5 MiB) are clamped to 5,242,880. The cache's size limit ([Cache](#5-cache)). |
-| `validTargets` | list of string | | Ignored. |
-| `defaultTarget` | string | none | Optional. An empty value means no default target. The target used when a lookup fails or is throttled ([Picker](#9-picker)). |
-
-Negative `maxAge` or `staleAge` values make the config invalid.
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `routeLookupConfig` | object | Yes | — | The route lookup config (`RouteLookupConfig`). |
+| `routeLookupConfig.grpcKeybuilders` | list of object | Yes | — | MUST be non-empty. Each `GrpcKeyBuilder` says how to build the request key for a set of methods ([Key Building](#3-key-building)). |
+| `routeLookupConfig.grpcKeybuilders[].names` | list of object | Yes | — | MUST be non-empty. The methods this key builder applies to. |
+| `routeLookupConfig.grpcKeybuilders[].names[].service` | string | Yes | — | MUST be non-empty. The fully-qualified service name, including the package. |
+| `routeLookupConfig.grpcKeybuilders[].names[].method` | string | No | `""` | The method name. Empty means every method of the service. |
+| `routeLookupConfig.grpcKeybuilders[].headers` | list of object | No | empty list | List of `NameMatcher`, each producing one key from request headers. |
+| `routeLookupConfig.grpcKeybuilders[].headers[].key` | string | Yes | — | MUST be non-empty. The key name. |
+| `routeLookupConfig.grpcKeybuilders[].headers[].names` | list of string | No | empty list | An ordered list of header names. A `NameMatcher` with an empty `names` list never produces a value. |
+| `routeLookupConfig.grpcKeybuilders[].headers[].requiredMatch` | bool | No | `false` | MUST NOT be true for gRPC; if true, the config is invalid. |
+| `routeLookupConfig.grpcKeybuilders[].extraKeys` | object | No | — | Key names under which the RPC's host, service, and method are added. |
+| `routeLookupConfig.grpcKeybuilders[].extraKeys.host` | string | No | `""` | Key name for the RPC's host. An empty or absent key name means that value is not added. |
+| `routeLookupConfig.grpcKeybuilders[].extraKeys.service` | string | No | `""` | Key name for the RPC's service. An empty or absent key name means that value is not added. |
+| `routeLookupConfig.grpcKeybuilders[].extraKeys.method` | string | No | `""` | Key name for the RPC's method. An empty or absent key name means that value is not added. |
+| `routeLookupConfig.grpcKeybuilders[].constantKeys` | map of string → string | No | empty map | Map of key to value, added to every key built by this builder. A key MUST be non-empty. |
+| `routeLookupConfig.httpKeybuilders` | list of object | No | — | Ignored. |
+| `routeLookupConfig.lookupService` | string | Yes | — | MUST be non-empty, and MUST be a valid target URI for a gRPC channel whose scheme has a registered resolver ([Name Resolution](../02-name-resolution.md)). The target of the control channel ([Control Channel](#4-control-channel)). |
+| `routeLookupConfig.lookupServiceTimeout` | `Duration` | No | `10s` | Deadline of each `RouteLookup` RPC. Zero or unset means the default. A negative value makes the config invalid. |
+| `routeLookupConfig.maxAge` | `Duration` | No | 5 minutes | How long a successful response stays usable. Zero or unset means the default. If `staleAge` is not set, values above 5 minutes are clamped to 5 minutes. If `staleAge` is set, `maxAge` is not clamped. A negative value makes the config invalid. |
+| `routeLookupConfig.staleAge` | `Duration` | No | 5 minutes | Age after which a still-valid response is refreshed in the background. Values above 5 minutes are clamped to 5 minutes. After clamping, if `staleAge` is greater than `maxAge`, `staleAge` is set to `maxAge`. A negative value makes the config invalid. |
+| `routeLookupConfig.cacheSizeBytes` | int64 | Yes | — | MUST be greater than 0; otherwise the config is invalid. Values above 5,242,880 (5 MiB) are clamped to 5,242,880. The cache's size limit ([Cache](#5-cache)). |
+| `routeLookupConfig.validTargets` | list of string | No | — | Ignored. |
+| `routeLookupConfig.defaultTarget` | string | No | `""` (no default target) | An empty value means no default target. The target used when a lookup fails or is throttled ([Picker](#9-picker)). |
+| `routeLookupChannelServiceConfig` | object | No | — | If present, it MUST be a valid service config (`ServiceConfig`, in JSON form); otherwise the RLS config is invalid. It is the service config of the control channel ([Control Channel](#4-control-channel)). |
+| `childPolicy` | `LoadBalancingConfig list` | Yes | — | The child policy for each target. Validated as described in [Validation](#21-validation). |
+| `childPolicyConfigTargetFieldName` | string | Yes | — | MUST be non-empty. The name of the field in the child's config that receives the target name ([Child Policies](#7-child-policies)). |
 
 <!-- REVIEW(divergence) [RLS-1]: duration and size edge cases differ. lookupServiceTimeout: Java rejects zero and negative; Go treats zero as the default and accepts negative; C++ keeps an explicit zero (immediate deadline). maxAge zero: Go treats it as unset (5 min), as the proto comment says; C++ and Java keep it as zero. Negative maxAge/staleAge are rejected by none. cacheSizeBytes: all three reject 0 (the proto comment says "omitted or zero → client default"); the cap is 5 MiB in C++ and Java but 40 MiB in Go (maxCacheSize = 5*1024*1024*8). Spec says: zero = unset/default for the durations (proto3 semantics; xDS-generated JSON omits zero values), negatives invalid, cacheSizeBytes > 0 required, 5 MiB cap. The proto comment on cache_size_bytes should be updated to match. -->
 
-### 2.3 `grpcKeybuilders`
+Unknown fields are ignored at every level.
 
-Each `GrpcKeyBuilder` says how to build the request key for a set of
-methods.
+### 2.1 Validation
 
-| Field (JSON) | Validation and meaning |
-| --- | --- |
-| `names` | MUST be non-empty. Each `Name` has `service` (MUST be non-empty; the fully-qualified service name, including the package) and `method` (optional; empty means every method of the service). |
-| `headers` | List of `NameMatcher`. Each has `key` (MUST be non-empty), `names` (an ordered list of header names), and `requiredMatch` (MUST NOT be true for gRPC; if true, the config is invalid). A `NameMatcher` with an empty `names` list never produces a value. |
-| `extraKeys` | Optional. `host`, `service`, `method`: key names under which the RPC's host, service, and method are added. An empty or absent key name means that value is not added. |
-| `constantKeys` | Map of key to value, added to every key built by this builder. A key MUST be non-empty. |
+Any violation of the rules in the table above, or of the following rules,
+makes the config invalid. An invalid config is rejected as specified in
+[LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration).
 
-Additional rules (any violation makes the config invalid):
-
+- Negative `maxAge` or `staleAge` values make the config invalid.
+- If `staleAge` is set, `maxAge` MUST also be set.
+- `childPolicy`: each entry MUST be an object with exactly one field (the
+  policy name) whose value is an object. The first entry whose policy is
+  registered is selected, as for any `loadBalancingConfig` list
+  ([Load Balancing](../05-load-balancing.md)). If none is registered, the
+  config is invalid. The selected entry is validated at parse time with
+  `childPolicyConfigTargetFieldName` set to a placeholder string (the
+  `defaultTarget`, if set, MAY be used as the placeholder). If the
+  selected child policy rejects that config, the RLS config is invalid.
 - Across all key builders, each method path MUST appear at most once. A
   `Name` with service `S` and method `M` stands for the path `/S/M`; a
   `Name` with an empty method stands for `/S/`. Two `Name`s that stand for
@@ -151,9 +163,9 @@ build_key_map(path, metadata):
   lookup is still made for it, and the lookup server is expected to answer
   with a default route.
 - The host value is the parent channel's default authority
-  ([Channel](../channel.md)).
+  ([Channel](../01-channel.md)).
 - Header values are taken from the request metadata as the picker sees it
-  ([Pick Arguments](../load-balancing.md#61-pick-arguments)).
+  ([Pick Arguments](../05-load-balancing.md#61-pick-arguments)).
 
 <!-- REVIEW(divergence) [RLS-3]: header values and host value. Multiple values for a header: C++ and Go join them with ","; Java uses only the last value. "-bin" header names: Go uses the raw value; Java throws at pick time; C++ is unclear. Host value: C++ uses the channel's default authority; Java uses that authority with any port removed; Go uses the endpoint part of the channel's target URI. Spec says: join with ","; host = default authority (C++), since the authority is what the server sees. "-bin" handling is left unspecified. -->
 
@@ -270,7 +282,7 @@ responses received afterwards.
 A failed lookup puts its entry into backoff. The backoff parameters are
 the standard connection backoff parameters: initial delay 1 second,
 multiplier 1.6, jitter 0.2, maximum delay 120 seconds (see
-[Connection Backoff](../subchannels.md#7-connection-backoff)).
+[Connection Backoff](../06-subchannels.md#7-connection-backoff)).
 
 ```
 on lookup failure for entry e:
@@ -387,10 +399,10 @@ default_or_fail(code, message):
   target exists. A pick never waits for a lookup when the entry has valid
   data: background refreshes do not delay RPCs.
 - Failed picks use the Fail result, not Drop, so wait-for-ready RPCs keep
-  waiting ([Pick Results](../load-balancing.md#62-pick-results)). The
+  waiting ([Pick Results](../05-load-balancing.md#62-pick-results)). The
   failure message includes the status of the failed lookup.
 - `x-google-rls-data` is added through the pick result's metadata
-  additions ([Pick Results](../load-balancing.md#62-pick-results)),
+  additions ([Pick Results](../05-load-balancing.md#62-pick-results)),
   replacing any value the RPC already has for that header.
 
 <!-- REVIEW(divergence) [RLS-6]: picker details. When every target's child is in TRANSIENT_FAILURE, C++ and Go use the last target; Java uses the first. Go adds x-google-rls-data even when header_data is empty; C++ and Java only when non-empty. Go returns the backoff failure as a status error, which its channel treats as a drop (wait-for-ready RPCs fail); C++ and Java use a normal pick failure. Messages differ: "RLS request failed: <status>" (C++), "Unable to retrieve RLS targets from RLS server <lookupService>.  RLS server returned: <code>: <desc>" (Java), "most recent error from RLS server: <err>" (Go). Spec says: majority behavior, and the message only has to include the lookup status. -->
@@ -423,20 +435,10 @@ control channel; a new control channel starts with empty counts.
 
 <!-- REVIEW(divergence) [RLS-7]: throttling. C++: as specified, except that a throttled background refresh is still sent (rls.cc Picker::Pick falls through to StartRlsCall when the entry has valid data). Java: same formula and window (50 slots), but a throttled lookup creates a backoff entry with RESOURCE_EXHAUSTED, and a throttled refresh therefore replaces valid data. Go: same formula, but backend responses are never recorded (RegisterBackendResponse is never called), so it never throttles. Spec says: C++ formula and window, no request and no backoff for throttled lookups (C++/Go structure), and no request for a throttled refresh. -->
 
-## 11. Other Operations
-
-- **`ExitIdle()`:** forward to every child.
-- **`ResetBackoff()`:** reset the control channel's connection backoff,
-  take every cache entry out of backoff, forward to every child, and
-  report a new picker.
-- **`Shutdown()`:** cancel pending lookups and timers, shut down the
-  control channel, and destroy the cache and all children.
-- **Resolver errors:** forward to every child.
-
-## 12. Metrics
+## 11. Metrics
 
 The policy records the following metrics through the channel's metrics
-recorder ([Metric Catalog](../../08-observability/metrics.md)). All are
+recorder ([Metric Catalog](../../08-observability/03-metrics.md)). All are
 off by default.
 
 > **Experimental:** All RLS metrics are experimental.
@@ -458,7 +460,25 @@ Label values:
 | `grpc.lb.rls.data_plane_target` | The target the pick was delegated to. |
 | `grpc.lb.pick_result` | `complete`, `fail`, or `drop`: the child's pick result. Picks that queue are not counted. |
 | `grpc.lb.rls.instance_uuid` | A random UUID generated per policy instance, so that gauges from several instances on one channel can be told apart. |
-| `grpc.client.call.custom` | The call's custom telemetry label ([Pick Arguments](../load-balancing.md#61-pick-arguments)). |
+| `grpc.client.call.custom` | The call's custom telemetry label ([Pick Arguments](../05-load-balancing.md#61-pick-arguments)). |
+
+## 12. LB Policy API
+
+The policy implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) and the
+[Helper API](../05-load-balancing.md#5-helper-api) it provides to its
+children as follows:
+
+| Operation | Behavior |
+| --- | --- |
+| `Update(update) → status` | Applies the new config: creates the control channel on the first config, or a new one when `lookupService` changes ([Control Channel](#4-control-channel)); resizes the cache if `cacheSizeBytes` changed, without otherwise flushing it ([Cache](#5-cache)); and creates the `defaultTarget` child when a config sets it ([Child Policies](#7-child-policies)). Passes the endpoints, resolution note, and attributes to every child on every update, even when the RLS config did not change; if the endpoints field is an error, the error is forwarded to every child. A child that rejects an update causes the policy to request re-resolution. Reports a new picker once after the update, with no intermediate pickers ([Connectivity State](#8-connectivity-state)). Returns a status that combines the children's statuses. |
+| `ExitIdle()` | Forwarded to every child. |
+| `ResetBackoff()` | Resets the control channel's connection backoff, takes every cache entry out of backoff, forwards the call to every child, and reports a new picker. |
+| `Shutdown()` | Cancels pending lookups and timers, shuts down the control channel, and destroys the cache and all children. |
+| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its children do. (The policy watches the connectivity state of its control channel; see [Control Channel](#4-control-channel).) |
+| Child `UpdateState(state, status, picker)` | Records the child's state and picker ([Child Policies](#7-child-policies)), recomputes the aggregate state, and reports a new RLS picker ([Connectivity State](#8-connectivity-state), [Picker](#9-picker)). |
+| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
+| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
 
 ## 13. API Requirements
 
@@ -467,6 +487,6 @@ Label values:
   config and through the xDS RLS cluster specifier plugin.
 - The LB policy helper MUST let the policy create the control channel with
   the parent channel's credentials (including attached call credentials)
-  and default authority ([Helper API](../load-balancing.md#5-helper-api)).
+  and default authority ([Helper API](../05-load-balancing.md#5-helper-api)).
 - The pick result MUST let the policy add request headers to the call
-  attempt ([Pick Results](../load-balancing.md#62-pick-results)).
+  attempt ([Pick Results](../05-load-balancing.md#62-pick-results)).

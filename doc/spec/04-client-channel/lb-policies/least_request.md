@@ -11,28 +11,37 @@
 > `least_request_experimental`. Its name and configuration are not yet
 > stable.
 
-## 1. Purpose
+> **Introduced by:** [gRFC A48: xDS Least Request LB Policy](https://github.com/grpc/proposal/blob/master/A48-xds-least-request-lb-policy.md)
 
-`least_request` is a petiole policy that sends each call to the endpoint
-with the fewest outstanding calls among a small random sample of READY
-endpoints ("power of N choices"). This adapts to endpoints that are
-slower than others. Only the equal-weights form of the algorithm is
-supported. Endpoint weights are ignored.
+## 1. Overview
+
+`least_request` is a petiole policy (see
+[Load Balancing: Leaf, Parent, and Petiole Policies](../05-load-balancing.md#91-leaf-parent-and-petiole-policies))
+that sends each call to the endpoint with the fewest outstanding calls
+among a small random sample of READY endpoints ("power of N choices").
+This adapts to endpoints that are slower than others. Only the
+equal-weights form of the algorithm is supported. Endpoint weights are
+ignored.
 
 Registered name: `least_request_experimental`.
 
 ## 2. Configuration
 
-Proto: `LeastRequestLocalityLoadBalancingPolicyConfig` in
-`grpc/service_config/service_config.proto`.
+Proto: `LeastRequestLocalityLoadBalancingPolicyConfig` in `grpc/service_config/service_config.proto`.
 
 ```json
 { "least_request_experimental": { "choiceCount": 2 } }
 ```
 
-| Field (JSON) | Type | Default | Validation / normalization |
-| --- | --- | --- | --- |
-| `choiceCount` | uint | 2 | Values below 2 make the config invalid. Values above 10 are treated as 10. |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `choiceCount` | uint64 | No | `2` | Number of READY endpoints sampled per pick ([Picker](#5-picker)). Values below 2 make the config invalid. Values above 10 are treated as 10. |
+
+### 2.1 Validation
+
+- The config is invalid if `choiceCount` is less than 2. An invalid config
+  is rejected as described in
+  [Load Balancing: LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration).
 
 ## 3. Endpoint Management and Connectivity State
 
@@ -66,7 +75,7 @@ is retained across updates while the endpoint remains present.
 - The picker attaches a call tracker that atomically decrements the
   counter when the call finishes, whatever its status. The decrement
   also happens when the pick is not used (see
-  [../load-balancing.md](../load-balancing.md)).
+  [Load Balancing: Call-Completion Tracking](../05-load-balancing.md#64-call-completion-tracking)).
 
 Counters can be slightly stale when read concurrently. This is accepted.
 
@@ -93,10 +102,28 @@ than once. In CONNECTING the picker queues. In TRANSIENT_FAILURE it fails
 with an error that includes the most recent connection failure and the
 resolution note, as for `round_robin`.
 
-## 6. API Requirements
+## 6. LB Policy API
+
+`least_request` implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) and the
+[Helper API](../05-load-balancing.md#5-helper-api) it provides to its
+children as follows:
+
+| Operation | Behavior |
+| --- | --- |
+| `Update(update) → status` | Manages `pick_first` children as [`round_robin`](round_robin.md) does ([Endpoint Management and Connectivity State](#3-endpoint-management-and-connectivity-state)), retaining each endpoint's `active_requests` counter by endpoint identity ([Outstanding Request Counters](#4-outstanding-request-counters)). Each child receives its endpoint with that endpoint's attributes, plus the resolution note and the top-level attributes. A new `choiceCount` takes effect when the next picker is built. An empty endpoint list, or an endpoint error with no previous list, shuts down all children, reports TRANSIENT_FAILURE, and returns `UNAVAILABLE`. An endpoint error with a previous list is ignored, and the existing children are kept. Returns OK in all other cases. |
+| `ExitIdle()` | No-op: the policy never reports IDLE, because it calls `ExitIdle()` on any child that reports IDLE. |
+| `ResetBackoff()` | Forwarded to all children. |
+| `Shutdown()` | Shuts down all children. |
+| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its `pick_first` children do. |
+| Child `UpdateState(state, status, picker)` | Records the child's state and picker. If the state is IDLE, calls the child's `ExitIdle()`. Recomputes the aggregate state ([Endpoint Management and Connectivity State](#3-endpoint-management-and-connectivity-state)) and reports a new picker ([Picker](#5-picker)). While an update is being applied to the children, the aggregate is reported only once, after all children are updated. |
+| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
+| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
+
+## 7. API Requirements
 
 - gRPC MUST register this policy under the name
   `least_request_experimental`, so that it can be selected through
   `loadBalancingConfig` in the service config and used as a child by other
   policies, including custom ones
-  ([../load-balancing.md](../load-balancing.md)).
+  ([Load Balancing](../05-load-balancing.md)).

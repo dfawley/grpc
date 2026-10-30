@@ -20,10 +20,10 @@ NOT assume any correlation between connections and RPCs, except that an RPC
 cannot outlive the connection that carries it.
 
 This section describes server behavior that is independent of the transport
-encoding. The HTTP/2 mapping is in [gRPC over HTTP/2](../03-wire-protocol/http2.md),
+encoding. The HTTP/2 mapping is in [gRPC over HTTP/2](../03-wire-protocol/01-http2.md),
 and connection-level behavior (settings, flow control, keepalive enforcement,
 connection age and idleness) is in
-[HTTP/2 transport behavior](../03-wire-protocol/http2-transport.md).
+[HTTP/2 transport behavior](../03-wire-protocol/02-http2-transport.md).
 
 ## 1. Server Lifecycle
 
@@ -58,14 +58,14 @@ Before the server starts, the application configures it:
    unparsed byte sequences.
 3. **Listening addresses.** The application adds one or more listening
    addresses. Each address has its own **server credentials**, for example
-   insecure, TLS (see [TLS credentials](../06-security/tls.md)), or xDS-provided
-   credentials (see [xDS security](../09-xds/security.md)). Different
+   insecure, TLS (see [TLS credentials](../06-security/01-tls.md)), or xDS-provided
+   credentials (see [xDS security](../09-xds/08-security.md)). Different
    addresses on the same server MAY use different credentials.
 4. **Server options.** These include limits ([Limits](#24-limits)), connection
    management and keepalive settings
-   ([HTTP/2 Transport Behavior](../03-wire-protocol/http2-transport.md)), interceptors
+   ([HTTP/2 Transport Behavior](../03-wire-protocol/02-http2-transport.md)), interceptors
    ([Server Interceptors](#4-server-interceptors)), compression settings, and instrumentation
-   (see [Instrumentation architecture](../08-observability/instrumentation.md)).
+   (see [Instrumentation architecture](../08-observability/01-instrumentation.md)).
 
 ### 1.2 Binding and Start
 
@@ -85,7 +85,7 @@ starts. The set of registered services is fixed once the server has started.
 
 A server that is xDS-enabled can be "started" while not yet serving on a
 listener, because it waits for xDS configuration. That behavior is specified in
-[xDS-enabled servers](../09-xds/server.md).
+[xDS-enabled servers](../09-xds/07-server.md).
 
 ### 1.3 Graceful Shutdown
 
@@ -98,7 +98,7 @@ work:
    two-`GOAWAY` sequence: a first `GOAWAY` with last-stream-id 2^31−1, then,
    after at least one round trip (for example, a `PING` and its ack), a second
    `GOAWAY` that carries the ID of the last stream actually accepted. The
-   wire-level details are in [GOAWAY](../03-wire-protocol/http2.md#92-goaway).
+   wire-level details are in [GOAWAY](../03-wire-protocol/01-http2.md#92-goaway).
 3. Streams that the client creates after the final `GOAWAY` (IDs greater than
    the advertised last-stream-id) are not processed. A client treats those RPCs
    as never having reached the server and MAY retry them transparently.
@@ -144,7 +144,7 @@ does not affect what clients observe on the wire.
 ### 2.1 Request Validation
 
 When a new stream arrives, the server validates the request headers before it
-dispatches the RPC. The full grammar is in [gRPC over HTTP/2](../03-wire-protocol/http2.md).
+dispatches the RPC. The full grammar is in [gRPC over HTTP/2](../03-wire-protocol/01-http2.md).
 
 | Condition | Server behavior |
 | --- | --- |
@@ -184,7 +184,7 @@ lookup(path):
 
 The `:authority` header is not used for dispatch by default. It is made
 available to handlers (see [Call Context Available to Handlers](#27-call-context-available-to-handlers)), and
-mechanisms such as xDS routing (see [xDS-Enabled Servers](../09-xds/server.md)) MAY use it.
+mechanisms such as xDS routing (see [xDS-Enabled Servers](../09-xds/07-server.md)) MAY use it.
 
 ### 2.3 Request Cardinality
 
@@ -204,7 +204,7 @@ registration:
 | Maximum request header list size | implementation-defined; implementations SHOULD provide a safe default | The RPC is rejected ([Request Validation](#21-request-validation)). The server SHOULD advertise the limit with HTTP/2 `SETTINGS_MAX_HEADER_LIST_SIZE`. Size is computed as in HTTP/2: for each header field, the uncompressed name length plus the value length (binary values after base64 encoding) plus 32. |
 | Maximum receive (request) message size | 4 MiB (4194304 bytes) | The RPC fails with `RESOURCE_EXHAUSTED`. The handler observes cancellation. The limit applies to both the size as framed (the length prefix, checked before reading the message) and the size after decompression ([Core RPC Semantics: Message Size Limits](../02-rpc-semantics/README.md#12-message-size-limits)). |
 | Maximum send (response) message size | unlimited | The send fails and the RPC completes with `RESOURCE_EXHAUSTED`. |
-| Maximum concurrent streams per connection | unlimited | The server advertises the limit with `SETTINGS_MAX_CONCURRENT_STREAMS`. Streams above the limit are refused with `RST_STREAM(REFUSED_STREAM)`, and the client sees them as unprocessed (`UNAVAILABLE`, eligible for transparent retry). See [HTTP/2 Transport Behavior](../03-wire-protocol/http2-transport.md). |
+| Maximum concurrent streams per connection | unlimited | The server advertises the limit with `SETTINGS_MAX_CONCURRENT_STREAMS`. Streams above the limit are refused with `RST_STREAM(REFUSED_STREAM)`, and the client sees them as unprocessed (`UNAVAILABLE`, eligible for transparent retry). See [HTTP/2 Transport Behavior](../03-wire-protocol/02-http2-transport.md). |
 
 If the server runs out of resources for other reasons (for example, a
 flow-control or memory limit), it MAY fail RPCs with `RESOURCE_EXHAUSTED`.
@@ -224,12 +224,12 @@ When the deadline passes before the RPC completes, the server:
    sent Trailers, followed by `RST_STREAM(NO_ERROR)` if the request stream is
    still open. Otherwise it MUST reset the stream with `RST_STREAM(CANCEL)`,
    if the stream is not already closed (see
-   [gRPC over HTTP/2](../03-wire-protocol/http2.md#84-deadline-expiry-and-cancellation)).
+   [gRPC over HTTP/2](../03-wire-protocol/01-http2.md#84-deadline-expiry-and-cancellation)).
 
 The client's deadline races with the server's. A client that sees a
 cancellation after its own deadline has passed reports `DEADLINE_EXCEEDED`, so
 either signal gives the same client-visible outcome.
-<!-- REVIEW(divergence) [SERVER-3]: Java and Go send only RST_STREAM(CANCEL); C++ sends DEADLINE_EXCEEDED trailers then RST_STREAM(NO_ERROR). Spec allows both; see the comment in [Deadline expiry and cancellation](../03-wire-protocol/http2.md#84-deadline-expiry-and-cancellation). -->
+<!-- REVIEW(divergence) [SERVER-3]: Java and Go send only RST_STREAM(CANCEL); C++ sends DEADLINE_EXCEEDED trailers then RST_STREAM(NO_ERROR). Spec allows both; see the comment in [Deadline expiry and cancellation](../03-wire-protocol/01-http2.md#84-deadline-expiry-and-cancellation). -->
 
 The deadline MUST be visible to handlers ([Call Context Available to Handlers](#27-call-context-available-to-handlers)).
 
@@ -266,7 +266,7 @@ For each RPC, the server gives the handler a call context with at least:
 * The full method name.
 * The request metadata (custom metadata from Request-Headers). This includes
   keys that gRPC defines for application use, such as
-  `grpc-previous-rpc-attempts` (see [Retries](../04-client-channel/retries.md)).
+  `grpc-previous-rpc-attempts` (see [Retries](../04-client-channel/10-retries.md)).
 * The value of `:authority`.
 * The deadline, if any, and the cancellation state ([Cancellation](#26-cancellation)).
 * **Peer information**: the remote address of the connection, as reported by
@@ -278,7 +278,7 @@ For each RPC, the server gives the handler a call context with at least:
   NOT use other call properties (such as metadata or the peer address) for
   authentication.
 * For per-call backend metrics, a per-call metric recorder when that feature is
-  enabled (see [Backend Metrics (ORCA)](../07-services/orca.md)).
+  enabled (see [Backend Metrics (ORCA)](../07-services/03-orca.md)).
 
 ## 3. Response Semantics
 
@@ -294,7 +294,7 @@ It delays them until one of the following happens:
 The handler MAY set custom response-header metadata any time before the
 headers are sent. Once they are sent, the handler can no longer change them.
 Lazy headers matter for retries: a client cannot retry after it has received
-Response-Headers (see [Retries and Hedging](../04-client-channel/retries.md)).
+Response-Headers (see [Retries and Hedging](../04-client-channel/10-retries.md)).
 
 Response-Headers contain `:status 200`, `content-type`, `grpc-encoding` if
 response messages may be compressed, `grpc-accept-encoding` (the algorithms the
@@ -316,7 +316,7 @@ sending anything.
 Every RPC that completes normally ends with Trailers carrying `grpc-status`,
 an optional `grpc-message`, an optional `grpc-status-details-bin` (non-OK only),
 and custom trailer metadata. The status is sent even when it is `OK`. Encodings
-are in [gRPC over HTTP/2](../03-wire-protocol/http2.md).
+are in [gRPC over HTTP/2](../03-wire-protocol/01-http2.md).
 
 * Only the server application decides on an `OK` status. The server library
   MUST NOT invent an `OK` status.
@@ -331,7 +331,7 @@ are in [gRPC over HTTP/2](../03-wire-protocol/http2.md).
   `grpc-message` (see [Rich Error Details](../02-rpc-semantics/README.md#105-rich-error-details)).
   The server library MAY check this but is not required to.
 * A server MAY ask a client not to retry, or to retry after a delay, by setting
-  the `grpc-retry-pushback-ms` trailer (see [Retries and Hedging](../04-client-channel/retries.md)).
+  the `grpc-retry-pushback-ms` trailer (see [Retries and Hedging](../04-client-channel/10-retries.md)).
 * When a server is shutting down and refuses an RPC at the application level,
   it uses `UNAVAILABLE`.
 
@@ -372,7 +372,7 @@ RPCs that the unknown-method handler serves. An interceptor can:
 * Observe, modify, or replace request and response messages.
 * Set and modify response headers and trailers, and the status.
 * Fail the RPC before or after the handler runs (for example, for
-  authorization; see [Authorization](../06-security/authorization.md)).
+  authorization; see [Authorization](../06-security/03-authorization.md)).
 * Observe cancellation and completion.
 * Attach per-call data to the call context so that handlers can use it.
 
@@ -387,8 +387,10 @@ spec does not prescribe how they are implemented.
 
 ## 5. Connection Management
 
+> **Introduced by:** [gRFC A9: Server-side Connection Management](https://github.com/grpc/proposal/blob/master/A9-server-side-conn-mgt.md)
+
 A server manages its connections independently of RPCs. The behaviors below
-are specified in [HTTP/2 transport behavior](../03-wire-protocol/http2-transport.md):
+are specified in [HTTP/2 transport behavior](../03-wire-protocol/02-http2-transport.md):
 
 * `MAX_CONNECTION_IDLE` (default infinite): the server gracefully closes a
   connection that has had no outstanding RPCs for this long, with `GOAWAY`
@@ -410,13 +412,13 @@ are specified in [HTTP/2 transport behavior](../03-wire-protocol/http2-transport
 ## 6. Related Server Features
 
 * Per-call and out-of-band backend metric reporting:
-  [Backend Metrics (ORCA)](../07-services/orca.md).
+  [Backend Metrics (ORCA)](../07-services/03-orca.md).
 * Standard services hosted on a server (health, reflection, admin):
   [Standard Services and Admin Interface](../07-services/README.md).
 * xDS-enabled servers (xDS-provided listeners, routing, security, serving
-  modes): [xDS-enabled servers](../09-xds/server.md).
+  modes): [xDS-enabled servers](../09-xds/07-server.md).
 * Server instrumentation and channelz:
-  [Instrumentation Architecture](../08-observability/instrumentation.md), [Channelz](../08-observability/channelz.md).
+  [Instrumentation Architecture](../08-observability/01-instrumentation.md), [Channelz](../08-observability/05-channelz.md).
 
 ## 7. API Requirements
 

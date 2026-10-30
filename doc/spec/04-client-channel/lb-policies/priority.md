@@ -10,14 +10,17 @@
 > **Experimental:** The policy is registered as `priority_experimental`.
 > Its name and configuration are not yet stable.
 
-## 1. Purpose
+> **Introduced by:** [gRFC A56: `priority_experimental` LB policy](https://github.com/grpc/proposal/blob/master/A56-priority-lb-policy.md)
 
-`priority` is a parent policy with an ordered list of named children. It
-sends calls to the highest-priority child that is usable, and fails over
-to lower priorities when higher ones cannot connect. It is not
+## 1. Overview
+
+`priority` is a parent policy with an ordered list of named children (see
+[Policy Hierarchy](../05-load-balancing.md#9-policy-hierarchy)). It sends
+calls to the highest-priority child that is usable, and fails over to
+lower priorities when higher ones cannot connect. It is not
 xDS-specific. xDS uses it to choose a priority within a cluster and to
 implement aggregate clusters (see
-[../../09-xds/lb-policies.md](../../09-xds/lb-policies.md)).
+[xDS LB Policies](../../09-xds/05-lb-policies.md)).
 
 Registered name: `priority_experimental`.
 
@@ -31,45 +34,47 @@ Proto: `PriorityLoadBalancingPolicyConfig` in
   "priority_experimental": {
     "children": {
       "child0": { "config": [ { "round_robin": {} } ], "ignoreReresolutionRequests": false },
-      "child1": { "config": [ { "round_robin": {} } ] }
+      "child1": { "config": [ { "round_robin": {} } ], "ignoreReresolutionRequests": true }
     },
     "priorities": [ "child0", "child1" ]
   }
 }
 ```
 
-| Field (JSON) | Type | Description |
-| --- | --- | --- |
-| `children` | map of name → Child | The children's configs. The names let the policy update existing children in place rather than recreate them, even when a child moves to a different priority. |
-| `children[].config` | `LoadBalancingConfig` list | Required. The child's policy. |
-| `children[].ignoreReresolutionRequests` | bool | Default `false`. If true, the policy ignores re-resolution requests from this child. |
-| `priorities` | list of string | Child names in decreasing priority order (the first element has the highest priority). |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `children` | map of string → object | No | `{}` | The children's configs, keyed by child name. The names let the policy update existing children in place rather than recreate them, even when a child moves to a different priority. |
+| `children{}.config` | LoadBalancingConfig list | Yes | — | The child's policy. |
+| `children{}.ignoreReresolutionRequests` | bool | No | `false` | If true, the policy ignores re-resolution requests from this child. |
+| `priorities` | list of string | No | `[]` | Child names in decreasing priority order (the first element has the highest priority). |
 
 ### 2.1 Validation
 
 The config is invalid if any of the following holds:
 
 - A `config` list is missing or invalid (see
-  [../load-balancing.md](../load-balancing.md)).
+  [LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration)).
 - A name in `priorities` is not a key of `children`.
 - A name appears more than once in `priorities`.
 - A key of `children` does not appear in `priorities`.
 
-An empty `priorities` list (with an empty `children` map) is valid (see below).
+An empty `priorities` list (with an empty `children` map) is valid (see
+[Priority Selection Algorithm](#7-priority-selection-algorithm)).
 
 ## 3. Endpoint Distribution
 
 Endpoints are sent to children by hierarchical path: an endpoint goes to
 the child named by the first element of its path, with that element
-removed (see [../load-balancing.md](../load-balancing.md)). Each child's
-update contains its subset of endpoints, its config, the top-level
-attributes, and the resolution note.
+removed (see
+[Hierarchical Address Paths](../05-load-balancing.md#94-hierarchical-address-paths)).
+Each child's update contains its subset of endpoints, its config, the
+top-level attributes, and the resolution note.
 
 ## 4. Child State Tracking and Failover Timer
 
 For each child, the policy stores the most recent connectivity state,
 status, and picker. Children start in CONNECTING (see
-[../load-balancing.md](../load-balancing.md)).
+[Initial State](../05-load-balancing.md#43-initial-state)).
 
 Each child has a **failover timer** of **10 seconds**. While it runs, the
 child is considered to still be trying to connect.
@@ -104,13 +109,13 @@ child is considered to still be trying to connect.
 
 When the policy receives an update:
 
-1. Delete (or, optionally, deactivate; see
+1. Delete (or deactivate, as permitted by
    [Child Lifetime](#5-child-lifetime)) every child whose name is not in
    the new `priorities`.
 2. For every remaining existing child, send an update with its new
    config and endpoint subset. If the child's policy name changed, use
    the graceful-switch procedure (see
-   [../load-balancing.md](../load-balancing.md)).
+   [Gracefully Switching LB Policies](../05-load-balancing.md#12-gracefully-switching-lb-policies)).
 3. While applying steps 1–2, ignore picker updates from children for the
    purpose of choosing a priority (but still record them).
 4. Run the priority-selection algorithm once.
@@ -170,17 +175,25 @@ The child chosen by the last `SetCurrentPriority()` call is the
 status, and picker. When the current child later reports a new picker
 without changing the selection, the policy passes it through.
 
-## 8. Other Operations
+## 8. LB Policy API
 
-- **Re-resolution:** forward a child's request to the parent, unless that
-  child's `ignoreReresolutionRequests` is true.
-- **`ExitIdle()`:** forward to the current priority's child.
-- **`ResetBackoff()`:** forward to all children.
-- **`Shutdown()`:** delete all children and cancel all timers.
+`priority` implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) as follows.
+
+| Operation | Behavior |
+| --- | --- |
+| `Update(update) → status` | Deletes or deactivates removed children, updates the remaining children with their new configs and endpoint subsets, and runs the priority-selection algorithm once ([Configuration Updates](#6-configuration-updates), [Endpoint Distribution](#3-endpoint-distribution)). If the endpoints field is an error, the error is passed to each child in place of its endpoint subset. Returns a non-OK status if any child rejected its update, and OK otherwise. |
+| `ExitIdle()` | Forwarded to the current priority's child. |
+| `ResetBackoff()` | Forwarded to all children. |
+| `Shutdown()` | Deletes all children and cancels all timers. |
+| Subchannel connectivity / health updates | Not applicable: the policy does not create or watch subchannels; its children do. |
+| Child `UpdateState(state, status, picker)` | Records the child's state, status, and picker, starts or cancels the child's failover timer ([Child State Tracking and Failover Timer](#4-child-state-tracking-and-failover-timer)), and runs the priority-selection algorithm, except while applying an update ([Priority Selection Algorithm](#7-priority-selection-algorithm)). The policy reports the current priority's state, status, and picker. |
+| Child `RequestReresolution()` | Forwarded to the policy's own helper, unless that child's `ignoreReresolutionRequests` is true, in which case it is ignored. |
+| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper unchanged. |
 
 ## 9. API Requirements
 
 - gRPC MUST register this policy under the name `priority_experimental`,
   so that it can be selected through `loadBalancingConfig` in the service
   config and used as a child by other policies, including custom ones
-  ([../load-balancing.md](../load-balancing.md)).
+  ([Load Balancing](../05-load-balancing.md)).

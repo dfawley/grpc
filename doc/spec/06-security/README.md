@@ -17,13 +17,13 @@ Subsections:
 
 | Section | Contents |
 |---------|----------|
-| [TLS](tls.md) | TLS credentials: versions, ALPN, SNI, hostname and per-RPC authority verification, mTLS, certificate providers, custom verification, CRLs, SPIFFE, private key offloading, key exchange groups |
-| [Call Credentials](call-credentials.md) | Call credential behavior; access token, GCP service account identity JWT, and JWT token file credentials |
-| [Authorization](authorization.md) | RBAC engine, gRPC authorization policy, audit logging |
+| [TLS](01-tls.md) | TLS credentials: versions, ALPN, SNI, hostname and per-RPC authority verification, mTLS, certificate providers, custom verification, CRLs, SPIFFE, private key offloading, key exchange groups |
+| [Call Credentials](02-call-credentials.md) | Call credential behavior; access token, GCP service account identity JWT, and JWT token file credentials |
+| [Authorization](03-authorization.md) | RBAC engine, gRPC authorization policy, audit logging |
 
 xDS-managed security (xDS channel and server credentials, certificate provider
 instances in the bootstrap, SAN matching configured by the control plane) is
-specified in [xDS Security](../09-xds/security.md).
+specified in [xDS Security](../09-xds/08-security.md).
 
 ## 1. Security Model
 
@@ -37,13 +37,13 @@ gRPC separates security into two layers:
    per-connection *security level* ([Security Levels](#5-security-levels)) and a per-connection
    *AuthContext* ([AuthContext and Peer Identity](#6-authcontext-and-peer-identity)).
 2. **Per-RPC credentials.** *Call credentials* ([Call Credentials](#3-call-credentials) and
-   [Call Credentials](call-credentials.md)) produce metadata, typically bearer tokens, that
+   [Call Credentials](02-call-credentials.md)) produce metadata, typically bearer tokens, that
    is attached to individual RPCs. Call credentials are applied after a
    connection has been chosen for the RPC, so gRPC can check that the
    connection is secure enough to carry them.
 
 Authorization is a server-side decision made per RPC. It uses the AuthContext
-and the request (method, metadata). See [Authorization](authorization.md).
+and the request (method, metadata). See [Authorization](03-authorization.md).
 
 On the server, the AuthContext is the only reliable source of
 authentication information for an RPC. Application code MUST NOT
@@ -79,8 +79,8 @@ gRPC defines the following transport credential types:
 | Type | Client | Server | Security level | Description |
 |------|--------|--------|----------------|-------------|
 | Insecure | Yes | Yes | `NONE` | Plaintext. No handshake, no peer authentication. |
-| TLS | Yes | Yes | `PRIVACY_AND_INTEGRITY` | TLS 1.2+ with optional mutual authentication. See [TLS](tls.md). |
-| xDS | Yes | Yes | Depends on configuration | Uses security configuration from the xDS control plane, or the *fallback credentials* if the control plane supplies none. See [xDS Security](../09-xds/security.md). |
+| TLS | Yes | Yes | `PRIVACY_AND_INTEGRITY` | TLS 1.2+ with optional mutual authentication. See [TLS](01-tls.md). |
+| xDS | Yes | Yes | Depends on configuration | Uses security configuration from the xDS control plane, or the *fallback credentials* if the control plane supplies none. See [xDS Security](../09-xds/08-security.md). |
 | Composite | Yes | No | Same as the wrapped channel credentials | Channel credentials combined with call credentials ([Composite Credentials](#4-composite-credentials)). |
 
 Rules:
@@ -90,7 +90,7 @@ Rules:
   creates to any address.
 - A channel MUST NOT silently downgrade to weaker security. If a handshake
   fails, the connection attempt fails, and the subchannel follows its normal
-  backoff behavior (see [Subchannels](../04-client-channel/subchannels.md)).
+  backoff behavior (see [Subchannels](../04-client-channel/06-subchannels.md)).
 - Insecure credentials produce an AuthContext whose
   `transport_security_type` is `insecure` and whose `security_level` is
   `NONE`. Such an AuthContext has no peer identity.
@@ -120,7 +120,7 @@ ones.
 Each call credential declares the minimum security level of the connection
 that may carry it ([Security Levels](#5-security-levels)). Detailed behavior, including invocation
 timing, inputs, error handling, and the built-in types, is in
-[Call Credentials](call-credentials.md).
+[Call Credentials](02-call-credentials.md).
 
 ## 4. Composite Credentials
 
@@ -132,7 +132,7 @@ timing, inputs, error handling, and the built-in types, is in
   one call credentials object. When invoked, it invokes each component in
   order and combines all metadata they return. If any component fails, the
   composite fails with that component's status, and the RPC fails as described
-  in [Call Credentials](call-credentials.md). The minimum security level of a composite
+  in [Call Credentials](02-call-credentials.md). The minimum security level of a composite
   call credential is the highest minimum security level of its components.
 
 Composite channel credentials can be built from composite call credentials.
@@ -223,7 +223,7 @@ the information.
 | `x509_pem_cert` | TLS | The peer leaf certificate, PEM-encoded. |
 | `x509_pem_cert_chain` | TLS | The peer certificate chain, PEM-encoded. |
 | `ssl_session_reused` | TLS | `true` if the TLS session was resumed, otherwise `false`. |
-| `ssl_negotiated_key_exchange_group` | TLS | Name of the key exchange group negotiated in the handshake, for example `X25519MLKEM768`. See [TLS](tls.md). |
+| `ssl_negotiated_key_exchange_group` | TLS | Name of the key exchange group negotiated in the handshake, for example `X25519MLKEM768`. See [TLS](01-tls.md). |
 | `ssl_tls_version` | TLS | Negotiated TLS protocol version. |
 | `ssl_requested_server_name` | TLS (server side) | The SNI the client sent, if any. |
 
@@ -265,24 +265,24 @@ peer_identity_property_name    = "x509_subject_alternative_name"
 
 Each RPC has an authority (`:authority`). By default it is the channel's
 default authority, which comes from the target URI (see
-[Channel](../04-client-channel/channel.md)). The authority matters to
+[Channel](../04-client-channel/01-channel.md)). The authority matters to
 security in two ways:
 
 1. **Connection level.** With TLS, the client uses the channel's default
    authority, minus any port, as the name it expects in the server's
    certificate (hostname verification). By default it also uses that name as
-   the SNI. See [TLS](tls.md).
+   the SNI. See [TLS](01-tls.md).
 2. **RPC level.** The authority sent on an RPC can differ from the one the
    connection was verified against. This happens when the application
    overrides the authority for a call, or when xDS authority rewriting is in
-   effect (see [Client](../09-xds/client.md)).
+   effect (see [Client](../09-xds/04-client.md)).
 
 Override mechanisms:
 
 | Mechanism | Scope | Affects TLS name check? |
 |-----------|-------|-------------------------|
 | Channel default-authority option | All RPCs and all connections on the channel | Yes. The overridden authority becomes the expected server name and the default SNI. |
-| TLS server-name / SNI override option on TLS credentials | Connections made with those credentials | Yes. Changes the name used for SNI or verification, as defined in [TLS](tls.md). |
+| TLS server-name / SNI override option on TLS credentials | Connections made with those credentials | Yes. Changes the name used for SNI or verification, as defined in [TLS](01-tls.md). |
 | Per-call authority override | One RPC | No change to the connection. The RPC's authority is checked against the server certificate per RPC (see below). |
 | xDS authority rewriting | One RPC | Same as the per-call override. |
 
@@ -290,7 +290,7 @@ When an RPC's authority differs from the name its connection was verified
 against, the channel credentials decide whether the RPC may use that
 connection. TLS credentials by default check per RPC that the server
 certificate covers the RPC's authority, and fail the RPC otherwise. See
-[TLS](tls.md). Credentials that do no hostname verification (insecure
+[TLS](01-tls.md). Credentials that do no hostname verification (insecure
 credentials, or xDS credentials that use control-plane SAN matching instead)
 do no per-RPC check. A per-call authority override takes precedence over xDS
 authority rewriting.

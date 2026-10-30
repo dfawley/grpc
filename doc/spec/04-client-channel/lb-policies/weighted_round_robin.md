@@ -7,21 +7,22 @@
 
 <!-- Sources: A58, A61, A51 (client side), A78 (WRR metrics), A89, grpc/service_config/service_config.proto (WeightedRoundRobinLbConfig) -->
 
-## 1. Purpose
+> **Introduced by:** [gRFC A58: `weighted_round_robin` LB policy](https://github.com/grpc/proposal/blob/master/A58-client-side-weighted-round-robin-lb-policy.md)
 
-`weighted_round_robin` (WRR) is a petiole policy that spreads calls
-across endpoints in proportion to weights it computes from backend
-metrics reported by the endpoints themselves (see
-[../../07-services/orca.md](../../07-services/orca.md)). Without usable
+## 1. Overview
+
+`weighted_round_robin` (WRR) is a petiole policy (see
+[Load Balancing: Leaf, Parent, and Petiole Policies](../05-load-balancing.md#91-leaf-parent-and-petiole-policies))
+that spreads calls across endpoints in proportion to weights it computes
+from backend metrics reported by the endpoints themselves (see
+[Backend Metrics (ORCA)](../../07-services/03-orca.md)). Without usable
 weights, it behaves like [`round_robin`](round_robin.md).
 
 Registered name: `weighted_round_robin`.
 
 ## 2. Configuration
 
-Proto: `WeightedRoundRobinLbConfig` in
-`grpc/service_config/service_config.proto`. Duration fields use the
-protobuf JSON duration format (for example, `"10s"`).
+Proto: `WeightedRoundRobinLbConfig` in `grpc/service_config/service_config.proto`.
 
 ```json
 {
@@ -36,14 +37,25 @@ protobuf JSON duration format (for example, `"10s"`).
 }
 ```
 
-| Field (JSON) | Type | Default | Validation / normalization | Description |
+| Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `enableOobLoadReport` | bool | `false` | — | If true, use out-of-band reports. If false, use per-call reports. |
-| `oobReportingPeriod` | Duration | 10 s | Valid duration. | Reporting interval requested from servers in OOB mode. |
-| `blackoutPeriod` | Duration | 10 s | Valid duration. `0` disables the blackout. | How long an endpoint must report continuously before its weight is used. |
-| `weightExpirationPeriod` | Duration | 180 s | Valid duration. | A weight not updated for this long is no longer used. |
-| `weightUpdatePeriod` | Duration | 1 s | Values below 100 ms are treated as 100 ms. | How often the scheduler is rebuilt from current weights. |
-| `errorUtilizationPenalty` | float | 1.0 | Negative values make the config invalid. | Multiplier for the error-rate penalty in the weight formula. |
+| `enableOobLoadReport` | bool | No | `false` | If true, use out-of-band reports. If false, use per-call reports ([Load Report Sources](#5-load-report-sources)). |
+| `oobReportingPeriod` | Duration | No | `"10s"` | Reporting interval requested from servers in OOB mode. |
+| `blackoutPeriod` | Duration | No | `"10s"` | How long an endpoint must report continuously before its weight is used. `0` disables the blackout. |
+| `weightExpirationPeriod` | Duration | No | `"180s"` | A weight not updated for this long is no longer used. |
+| `weightUpdatePeriod` | Duration | No | `"1s"` | How often the scheduler is rebuilt from current weights. Values below 100 ms are treated as 100 ms. |
+| `errorUtilizationPenalty` | number | No | `1.0` | Multiplier for the error-rate penalty in the weight formula. MUST NOT be negative. |
+
+### 2.1 Validation
+
+The config is invalid, and is rejected as described in
+[Load Balancing: LB Policy Registry and Configuration](../05-load-balancing.md#2-lb-policy-registry-and-configuration),
+if:
+
+- `oobReportingPeriod`, `blackoutPeriod`, `weightExpirationPeriod`, or
+  `weightUpdatePeriod` is not a valid duration in the protobuf JSON
+  duration format (for example, `"10s"`).
+- `errorUtilizationPenalty` is negative.
 
 ## 3. Endpoint Management and Connectivity State
 
@@ -140,7 +152,7 @@ When `enableOobLoadReport` is true:
   endpoint.
 - Per-call reports are not parsed.
 - The OOB stream lifecycle is specified in
-  [Client-Side Backend Metrics](../backend-metrics.md).
+  [Client-Side Backend Metrics (ORCA)](../09-backend-metrics.md).
 
 When `enableOobLoadReport` changes, WRR MUST switch modes: it starts or
 stops the OOB watchers on existing subchannels, and makes the next picker
@@ -210,12 +222,14 @@ comparable smoothness, is conformant.
 > **Experimental:** The WRR metrics below are experimental (off by
 > default).
 
+> **Introduced by:** [gRFC A78: gRPC OTel Metrics for WRR, Pick First, and XdsClient](https://github.com/grpc/proposal/blob/master/A78-grpc-metrics-wrr-pf-xds.md)
+
 On each scheduler build, WRR records the metrics below. All have the
 required label `grpc.target`, and the optional labels `grpc.lb.locality`
 (from the locality-name attribute that `weighted_target` passes down,
 empty if unset) and `grpc.lb.backend_service` (from the backend-service
 resolver attribute, empty if unset). Definitions are in
-[../../08-observability/metrics.md](../../08-observability/metrics.md).
+[Metric Catalog: Weighted Round Robin LB Policy Metrics](../../08-observability/03-metrics.md#5-weighted-round-robin-lb-policy-metrics).
 
 | Name | Type | Unit | Description |
 | --- | --- | --- | --- |
@@ -224,9 +238,27 @@ resolver attribute, empty if unset). Definitions are in
 | `grpc.lb.wrr.endpoint_weight_stale` | Counter | `{endpoint}` | Endpoints in this update whose latest weight is older than the expiration period. |
 | `grpc.lb.wrr.endpoint_weights` | Histogram | `{weight}` | Weight of each endpoint in this update (0 if not usable). |
 
-## 8. API Requirements
+## 8. LB Policy API
+
+`weighted_round_robin` implements the generic
+[LB Policy API](../05-load-balancing.md#4-lb-policy-api) and the
+[Helper API](../05-load-balancing.md#5-helper-api) it provides to its
+children as follows:
+
+| Operation | Behavior |
+| --- | --- |
+| `Update(update) → status` | Manages `pick_first` children as [`round_robin`](round_robin.md) does ([Endpoint Management and Connectivity State](#3-endpoint-management-and-connectivity-state)), retaining each endpoint's weight state by endpoint identity. Each child receives its endpoint with that endpoint's attributes, plus the resolution note and the top-level attributes. A change to `enableOobLoadReport` or `oobReportingPeriod` is applied without recreating subchannels ([OOB Reports](#52-oob-reports)); the other config fields take effect when the next picker is built ([Building the Scheduler](#61-building-the-scheduler)). The locality-name and backend-service top-level attributes are used as metric labels ([Metrics](#7-metrics)). An empty endpoint list, or an endpoint error with no previous list, shuts down all children, reports TRANSIENT_FAILURE, and returns `UNAVAILABLE`. An endpoint error with a previous list is ignored, and the existing children are kept. Returns OK in all other cases. |
+| `ExitIdle()` | No-op: the policy never reports IDLE, because it calls `ExitIdle()` on any child that reports IDLE. |
+| `ResetBackoff()` | Forwarded to all children. |
+| `Shutdown()` | Shuts down all children, stops all OOB backend metric watchers, and cancels the weight update timer. |
+| Subchannel connectivity / health updates | The policy does not watch subchannel connectivity or health; its `pick_first` children do. When `enableOobLoadReport` is true, the policy receives OOB backend metric reports from the watchers it registers on its children's subchannels and passes them to `OnReport()` for the endpoint ([OOB Reports](#52-oob-reports)). |
+| Child `UpdateState(state, status, picker)` | Records the child's state and picker. If the state is IDLE, calls the child's `ExitIdle()`. If the state is READY, calls `OnEndpointBecomesReady()` for the endpoint ([Blackout and Expiration](#42-blackout-and-expiration)). Recomputes the aggregate state as for `round_robin` and reports a new picker with a newly built scheduler ([Picker and Scheduler](#6-picker-and-scheduler)). While an update is being applied to the children, the aggregate is reported only once, after all children are updated. |
+| Child `RequestReresolution()` | Forwarded to the policy's own helper. |
+| Child `CreateSubchannel(address, attributes)` | Passed through to the policy's own helper. When `enableOobLoadReport` is true, the policy registers an OOB backend metric watcher on the returned subchannel ([OOB Reports](#52-oob-reports)). |
+
+## 9. API Requirements
 
 - gRPC MUST register this policy under the name `weighted_round_robin`, so
   that it can be selected through `loadBalancingConfig` in the service
   config and used as a child by other policies, including custom ones
-  ([../load-balancing.md](../load-balancing.md)).
+  ([Load Balancing](../05-load-balancing.md)).
