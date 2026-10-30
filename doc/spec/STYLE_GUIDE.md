@@ -113,10 +113,10 @@ Every LB policy document (`04-client-channel/lb-policies/*.md` and
   parent, or petiole policy.
 - Ends with the line ``Registered name: `<name>`.``
 - **xDS policies** include `### 1.1 Position in the xDS LB Policy Tree`. It
-  contains the canonical xDS LB policy tree: a nested Markdown list in which
-  every policy is a link to its document. The tree is identical in every xDS
-  policy document except that the current policy is bold and marked
-  "(this policy)". It is followed by one sentence describing the policy's parent
+  contains the canonical xDS LB policy tree: a box-drawing tree (`├──`, `└──`,
+  `│`) inside an HTML `<pre>` block, in which every policy is an `<a href>` link
+  to its document. The tree is identical in every xDS policy document except
+  that the current policy is bold (`<b>`) and marked "◀ this policy". It is followed by one sentence describing the policy's parent
   and children. When the tree changes, update it in every xDS policy document
   and in [xDS LB Policies](09-xds/05-lb-policies.md).
 

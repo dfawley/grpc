@@ -47,24 +47,25 @@ The complete tree, with a link to each policy's document (each xDS LB policy
 document shows the same tree with its own position highlighted):
 
 <!-- XDS-LB-TREE: generated; identical in every xDS LB policy document except for the highlighted policy -->
-- [`xds_cluster_manager`](lb-policies/xds_cluster_manager.md): one child per cluster and per cluster specifier plugin
-  - [`cds`](lb-policies/cds.md): one per cluster
-    - Non-aggregate cluster (EDS or LOGICAL_DNS):
-      - [`outlier_detection`](../04-client-channel/lb-policies/outlier_detection.md)
-        - [`xds_cluster_impl`](lb-policies/xds_cluster_impl.md)
-          - [`xds_override_host`](lb-policies/xds_override_host.md)
-            - [`priority`](../04-client-channel/lb-policies/priority.md): one child per EDS priority
-              - The cluster's xDS LB policy ([xDS LB Policy Registry](#2-xds-lb-policy-registry)); by default:
-                - [`xds_wrr_locality`](lb-policies/xds_wrr_locality.md)
-                  - [`weighted_target`](../04-client-channel/lb-policies/weighted_target.md): one child per locality
-                    - Endpoint picking policy, e.g. [`round_robin`](../04-client-channel/lb-policies/round_robin.md), [`weighted_round_robin`](../04-client-channel/lb-policies/weighted_round_robin.md), or [`least_request`](../04-client-channel/lb-policies/least_request.md)
-                      - [`pick_first`](../04-client-channel/lb-policies/pick_first.md): one per endpoint
-              - Or another converted policy, e.g. [`ring_hash`](../04-client-channel/lb-policies/ring_hash.md) or [`random_subsetting`](../04-client-channel/lb-policies/random_subsetting.md)
-    - Aggregate cluster:
-      - [`priority`](../04-client-channel/lb-policies/priority.md): one child per leaf cluster
-        - [`cds`](lb-policies/cds.md): one per leaf cluster, each building the non-aggregate subtree above
-  - [`rls`](../04-client-channel/lb-policies/rls.md): one per RLS cluster specifier plugin
-    - [`cds`](lb-policies/cds.md): one per target cluster returned by the lookup server
+<pre>
+<a href="lb-policies/xds_cluster_manager.md">xds_cluster_manager</a>  (one child per cluster and per cluster specifier plugin)
+├── <a href="lb-policies/cds.md">cds</a>  (one per cluster)
+│   ├── non-aggregate cluster (EDS or LOGICAL_DNS):
+│   │   └── <a href="../04-client-channel/lb-policies/outlier_detection.md">outlier_detection</a>
+│   │       └── <a href="lb-policies/xds_cluster_impl.md">xds_cluster_impl</a>
+│   │           └── <a href="lb-policies/xds_override_host.md">xds_override_host</a>
+│   │               └── <a href="../04-client-channel/lb-policies/priority.md">priority</a>  (one child per EDS priority)
+│   │                   ├── <a href="lb-policies/xds_wrr_locality.md">xds_wrr_locality</a>  (default; see <a href="#2-xds-lb-policy-registry">xDS LB Policy Registry</a>)
+│   │                   │   └── <a href="../04-client-channel/lb-policies/weighted_target.md">weighted_target</a>  (one child per locality)
+│   │                   │       └── <a href="../04-client-channel/lb-policies/round_robin.md">round_robin</a> | <a href="../04-client-channel/lb-policies/weighted_round_robin.md">weighted_round_robin</a> | <a href="../04-client-channel/lb-policies/least_request.md">least_request</a>
+│   │                   │           └── <a href="../04-client-channel/lb-policies/pick_first.md">pick_first</a>  (one per endpoint)
+│   │                   └── or another converted policy: <a href="../04-client-channel/lb-policies/ring_hash.md">ring_hash</a> | <a href="../04-client-channel/lb-policies/random_subsetting.md">random_subsetting</a> | ...
+│   └── aggregate cluster:
+│       └── <a href="../04-client-channel/lb-policies/priority.md">priority</a>  (one child per leaf cluster)
+│           └── <a href="lb-policies/cds.md">cds</a>  (one per leaf cluster; non-aggregate subtree above)
+└── <a href="../04-client-channel/lb-policies/rls.md">rls</a>  (one per RLS cluster specifier plugin)
+    └── <a href="lb-policies/cds.md">cds</a>  (one per target cluster returned by the lookup server)
+</pre>
 <!-- /XDS-LB-TREE -->
 
 ### 1.1 Non-aggregate cluster (EDS or LOGICAL_DNS)
