@@ -5,7 +5,7 @@
 
 # `outlier_detection` LB Policy
 
-<!-- Sources: A50, A61, A91, grpc/service_config/service_config.proto (OutlierDetectionLoadBalancingConfig) -->
+<!-- Sources: A50, A61, A91 -->
 
 > **Experimental:** The policy is registered as
 > `outlier_detection_experimental`. Its name and configuration are not
@@ -16,11 +16,11 @@
 ## 1. Overview
 
 `outlier_detection` is a parent policy with one child (see
-[Policy Hierarchy](../06-load-balancing.md#9-policy-hierarchy)). It watches
+[Load Balancing: Policy Hierarchy](../06-load-balancing.md#9-policy-hierarchy)). It watches
 the results of calls that the child sends to each endpoint, and
 temporarily **ejects** endpoints whose error rates are outliers. An
 ejected endpoint is reported unhealthy to the child through the generic
-health watch ([Generic Health Reporting](../06-load-balancing.md#10-generic-health-reporting)),
+health watch ([Load Balancing: Generic Health Reporting](../06-load-balancing.md#10-generic-health-reporting)),
 so the child stops using it. The endpoint's connections are kept open,
 so that it can be used again immediately when it is un-ejected.
 
@@ -37,9 +37,6 @@ The policy is not xDS-specific. For how xDS configures it, see
 Registered name: `outlier_detection_experimental`.
 
 ## 2. Configuration
-
-Proto: `OutlierDetectionLoadBalancingConfig` in
-`grpc/service_config/service_config.proto`.
 
 ```json
 {
@@ -63,47 +60,52 @@ Proto: `OutlierDetectionLoadBalancingConfig` in
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `interval` | Duration | No | 10 s | Time between ejection-analysis sweeps. MUST be greater than 0. |
-| `baseEjectionTime` | Duration | No | 30 s | Base ejection duration. The actual duration is this multiplied by the endpoint's ejection multiplier. |
-| `maxEjectionTime` | Duration | No | max(300 s, `baseEjectionTime`) | Upper bound on ejection duration. |
-| `maxEjectionPercent` | uint32 | No | 10 | Maximum percentage of endpoints that can be ejected at once. Ejection never takes the ejected percentage above this value, so `0` disables ejection. MUST be at most 100. |
+| `interval` | Duration | No | `"10s"` | Time between ejection-analysis sweeps. MUST be greater than 0. |
+| `baseEjectionTime` | Duration | No | `"30s"` | Base ejection duration. The actual duration is this multiplied by the endpoint's ejection multiplier. |
+| `maxEjectionTime` | Duration | No | max(`"300s"`, `baseEjectionTime`) | Upper bound on ejection duration. |
+| `maxEjectionPercent` | uint32 | No | `10` | Maximum percentage of endpoints that can be ejected at once. Ejection never takes the ejected percentage above this value, so `0` disables ejection. MUST be at most 100. |
 | `successRateEjection` | object | No | — | If set, run the success-rate algorithm. If unset, the algorithm is not run. |
-| `successRateEjection.stdevFactor` | uint32 | No | 1900 | Ejection threshold factor, in thousandths (1900 means 1.9). |
-| `successRateEjection.enforcementPercentage` | uint32 | No | 100 | Percent chance of actually ejecting a detected outlier. MUST be at most 100. |
-| `successRateEjection.minimumHosts` | uint32 | No | 5 | Minimum number of endpoints with enough volume to run the algorithm. |
-| `successRateEjection.requestVolume` | uint32 | No | 100 | Minimum calls in an interval for an endpoint to be considered. |
+| `successRateEjection.stdevFactor` | uint32 | No | `1900` | Ejection threshold factor, in thousandths (1900 means 1.9). |
+| `successRateEjection.enforcementPercentage` | uint32 | No | `100` | Percent chance of actually ejecting a detected outlier. MUST be at most 100. |
+| `successRateEjection.minimumHosts` | uint32 | No | `5` | Minimum number of endpoints with enough volume to run the algorithm. |
+| `successRateEjection.requestVolume` | uint32 | No | `100` | Minimum calls in an interval for an endpoint to be considered. |
 | `failurePercentageEjection` | object | No | — | If set, run the failure-percentage algorithm. If unset, the algorithm is not run. |
-| `failurePercentageEjection.threshold` | uint32 | No | 85 | Failure percentage above which an endpoint is an outlier. MUST be at most 100. |
-| `failurePercentageEjection.enforcementPercentage` | uint32 | No | 100 | Percent chance of actually ejecting a detected outlier. MUST be at most 100. |
-| `failurePercentageEjection.minimumHosts` | uint32 | No | 5 | Minimum number of endpoints with enough volume to run the algorithm. |
-| `failurePercentageEjection.requestVolume` | uint32 | No | 50 | Minimum calls in an interval for an endpoint to be considered. |
+| `failurePercentageEjection.threshold` | uint32 | No | `85` | Failure percentage above which an endpoint is an outlier. MUST be at most 100. |
+| `failurePercentageEjection.enforcementPercentage` | uint32 | No | `100` | Percent chance of actually ejecting a detected outlier. MUST be at most 100. |
+| `failurePercentageEjection.minimumHosts` | uint32 | No | `5` | Minimum number of endpoints with enough volume to run the algorithm. |
+| `failurePercentageEjection.requestVolume` | uint32 | No | `50` | Minimum calls in an interval for an endpoint to be considered. |
 | `childPolicy` | LoadBalancingConfig list | Yes | — | The child policy. |
 
 ### 2.1 Other Inputs
 
-None.
+| Input | Location | Default | Used for |
+| --- | --- | --- | --- |
+| Backend service | Top-level attribute backend service, set by xDS (by `cds`, to the cluster name) | empty | The `grpc.lb.backend_service` metric label ([Metrics](#6-metrics)). |
+| Channel target | Channel: the parent channel's target | — | The `grpc.target` metric label ([Metrics](#6-metrics)). |
 
 ### 2.2 Validation
 
 The config is invalid if any of the following holds:
 
 - `interval`, `baseEjectionTime`, or `maxEjectionTime` is not a valid
-  `google.protobuf.Duration`, or is negative.
+  Duration string, or is negative.
 - `interval` is zero.
 - `maxEjectionPercent`, `successRateEjection.enforcementPercentage`,
   `failurePercentageEjection.threshold`, or
   `failurePercentageEjection.enforcementPercentage` is greater than 100.
 - `childPolicy` is missing or invalid (see
-  [LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration)).
+  [Load Balancing: LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration)).
 
 If both `successRateEjection` and `failurePercentageEjection` are unset,
 outlier detection is disabled: the policy passes everything through and
 does not count calls.
 
+The policy does not validate its other inputs ([Other Inputs](#21-other-inputs)).
+
 ## 3. LB Policy Implementation
 
 `outlier_detection` implements the generic
-[LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
+[Load Balancing: LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
 
 ### 3.1 Internal State
 
@@ -209,7 +211,7 @@ to the child unchanged.
 If the endpoints field is an error, the maps are left unchanged and the
 error is passed to the child. If the child's policy name changes, the
 child is replaced using the procedure in
-[Gracefully Switching LB Policies](../06-load-balancing.md#12-gracefully-switching-lb-policies).
+[Load Balancing: Gracefully Switching LB Policies](../06-load-balancing.md#12-gracefully-switching-lb-policies).
 
 On each config update, the policy starts, restarts, or cancels the
 ejection timer ([Ejection Timer](#ejection-timer)):
@@ -223,7 +225,14 @@ ejection timer ([Ejection Timer](#ejection-timer)):
   - Cancel the timer and clear the start time.
   - Un-eject all ejected endpoints, and reset every multiplier to 0.
 
-The policy reports its child's state unchanged
+If the update turns outlier detection on, call counting MUST start
+right away, without waiting for the child to report a new picker: if the
+current picker doesn't count calls, the policy reports the child's most
+recent state and status with a new picker that wraps the child's most
+recent picker ([Picker Implementation](#4-picker-implementation)). If
+the update turns outlier detection off, the policy SHOULD likewise
+report a new picker that doesn't count calls. Otherwise, the policy
+reports its child's state unchanged
 ([Calls From Children](#52-calls-from-children)). Returns the child's
 status.
 
@@ -253,7 +262,7 @@ or the failure count (any other status) in that endpoint's active bucket.
 
 The policy has a single child, whose policy and config come from
 `childPolicy`. The child receives the update described in
-[Update](#33-updates-from-the-parent), and `ExitIdle()`, `ResetBackoff()`, and
+[Updates from the Parent](#33-updates-from-the-parent), and `ExitIdle()`, `ResetBackoff()`, and
 `Shutdown()` are forwarded to it as specified in
 [ExitIdle](#34-exitidle), [ResetBackoff](#35-resetbackoff), and
 [Shutdown](#36-shutdown).

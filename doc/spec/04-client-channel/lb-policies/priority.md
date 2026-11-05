@@ -5,7 +5,7 @@
 
 # `priority` LB Policy
 
-<!-- Sources: A56, A115, A37 (ignore_reresolution_requests), A42 (failover timer interaction), grpc/service_config/service_config.proto (PriorityLoadBalancingPolicyConfig) -->
+<!-- Sources: A56, A115, A37 (ignore_reresolution_requests), A42 (failover timer interaction) -->
 
 > **Experimental:** The policy is registered as `priority_experimental`.
 > Its name and configuration are not yet stable.
@@ -15,7 +15,7 @@
 ## 1. Overview
 
 `priority` is a parent policy with an ordered list of named children (see
-[Policy Hierarchy](../06-load-balancing.md#9-policy-hierarchy)). It sends
+[Load Balancing: Policy Hierarchy](../06-load-balancing.md#9-policy-hierarchy)). It sends
 calls to the highest-priority child that is usable, and fails over to
 lower priorities when higher ones cannot connect. It is not
 xDS-specific. xDS uses it to choose a priority within a cluster and to
@@ -25,9 +25,6 @@ implement aggregate clusters (see
 Registered name: `priority_experimental`.
 
 ## 2. Configuration
-
-Proto: `PriorityLoadBalancingPolicyConfig` in
-`grpc/service_config/service_config.proto`.
 
 ```json
 {
@@ -45,21 +42,21 @@ Proto: `PriorityLoadBalancingPolicyConfig` in
 | --- | --- | --- | --- | --- |
 | `children` | map of string → object | No | `{}` | The children's configs, keyed by child name. The names let the policy update existing children in place rather than recreate them, even when a child moves to a different priority. |
 | `children{}.config` | LoadBalancingConfig list | Yes | — | The child's policy. |
-| `children{}.ignoreReresolutionRequests` | bool | No | `false` | If true, the policy ignores re-resolution requests from this child. |
+| `children{}.ignoreReresolutionRequests` | bool | No | `false` | If true, the policy ignores re-resolution requests from this child. Parsers MAY also accept the field name `ignore_reresolution_requests`. |
 | `priorities` | list of string | No | `[]` | Child names in decreasing priority order (the first element has the highest priority). |
 
 ### 2.1 Other Inputs
 
 | Input | Location | Default | Used for |
 | --- | --- | --- | --- |
-| Hierarchical path | Endpoint attribute hierarchical path, set by the parent that routes endpoints to named children (with xDS, by `cds`) | — | The first element selects the child that receives the endpoint, and is removed before the endpoint is passed down ([Endpoint Distribution](#endpoint-distribution); [Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths)). |
+| Hierarchical path | Endpoint attribute hierarchical path, set by the parent that routes endpoints to named children (with xDS, by `cds`) | — | The first element selects the child that receives the endpoint, and is removed before the endpoint is passed down ([Endpoint Distribution](#endpoint-distribution); [Load Balancing: Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths)). |
 
 ### 2.2 Validation
 
 The config is invalid if any of the following holds:
 
 - A `config` list is missing or invalid (see
-  [LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration)).
+  [Load Balancing: LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration)).
 - A name in `priorities` is not a key of `children`.
 - A name appears more than once in `priorities`.
 - A key of `children` does not appear in `priorities`.
@@ -71,18 +68,18 @@ Other inputs ([Other Inputs](#21-other-inputs)) are validated as follows:
 
 - **Hierarchical path:** an endpoint whose path is empty, or whose first
   element is not a key of `children`, is ignored (see
-  [Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths)).
+  [Load Balancing: Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths)).
 
 ## 3. LB Policy Implementation
 
 `priority` implements the generic
-[LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
+[Load Balancing: LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
 
 ### 3.1 Internal State
 
 For each child, the policy stores the most recent connectivity state,
 status, and picker. Children start in CONNECTING (see
-[Initial State](../06-load-balancing.md#43-initial-state)). Each child
+[Load Balancing: Initial State](../06-load-balancing.md#43-initial-state)). Each child
 also has a failover timer ([Failover Timer](#failover-timer)) and, while
 deactivated, a deletion timer ([Child Lifetime](#child-lifetime)).
 
@@ -96,7 +93,7 @@ The policy also tracks the **current priority**
 Endpoints are sent to children by hierarchical path: an endpoint goes to
 the child named by the first element of its path, with that element
 removed (see
-[Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths)).
+[Load Balancing: Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths)).
 Each child's update contains its subset of endpoints, its config, the
 top-level attributes, and the resolution note.
 
@@ -135,7 +132,7 @@ child is considered to still be trying to connect.
 
 The algorithm is idempotent: running it again with the same child states
 gives the same result. It runs after each config update and after each
-child state report (except during step 3 of [Update](#33-updates-from-the-parent)), and
+child state report (except during step 3 of [Updates from the Parent](#33-updates-from-the-parent)), and
 when a failover timer fires.
 
 ```python
@@ -194,9 +191,10 @@ When the policy receives an update:
    config and endpoint subset ([Endpoint Distribution](#endpoint-distribution)).
    If the child's policy name changed, use the graceful-switch procedure
    (see
-   [Gracefully Switching LB Policies](../06-load-balancing.md#12-gracefully-switching-lb-policies)).
+   [Load Balancing: Gracefully Switching LB Policies](../06-load-balancing.md#12-gracefully-switching-lb-policies)).
 3. While applying steps 1–2, ignore picker updates from children for the
-   purpose of choosing a priority (but still record them).
+   purpose of choosing a priority (but still record them). This includes
+   the TRANSIENT_FAILURE state of a child that rejects its update.
 4. Run the priority-selection algorithm once
    ([Priority Selection Algorithm](#priority-selection-algorithm)).
 

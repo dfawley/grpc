@@ -8,12 +8,12 @@
 <!-- Sources: doc/naming.md, doc/service_config.md, A2, A10, A21, A24, A31, A54, A61 (resolver result), A62 (address sorting background), A88 (resolution note), A79 (metrics recorder) -->
 
 A **name resolver** turns the channel's target URI into the information the
-channel needs to connect: a list of endpoints, an optional
-[service config](04-service-config.md), attributes for the LB policy, and
-optionally a ConfigSelector ([Per-call Configuration and Call Flow](05-call-dispatch.md)). This
-section specifies the resolver registry, the resolver plugin API, what a
-resolver result contains, how the channel handles results, and the built-in
-resolvers.
+channel needs to connect: a list of endpoints, a
+[service config](04-service-config.md) (if any), attributes for the LB policy,
+and a ConfigSelector ([Per-call Configuration and Call Flow](05-call-dispatch.md),
+if any). This section specifies the resolver registry, the resolver plugin API,
+what a resolver result contains, how the channel handles results, and the
+built-in resolvers.
 
 ## 1. Resolver Registry
 
@@ -45,8 +45,8 @@ A resolver delivers **results** to the channel. A result contains:
 | **Service config** | One of: a parsed [service config](04-service-config.md); an error (the resolver found a service config but it failed to parse or validate, or the lookup failed in a way the resolver treats as an error); or nothing (the resolver has no service config to return). |
 | **Attributes** | Top-level key/value pairs passed to the LB policy, for example a shared client object that the resolver gives to the LB policies. |
 | **Resolution note** | A human-readable string that gives context for failures. LB policies MUST include it in the status message of every pick failure they generate. For example, the xDS resolver uses it to report xDS errors that did not invalidate cached resources. |
-| **ConfigSelector** | Optional. An internal object that picks per-RPC configuration ([Per-call Configuration and Call Flow](05-call-dispatch.md)). It is not part of the public resolver API. Only built-in resolvers such as the xDS resolver provide one. |
-| **Result status callback** | Optional. The channel invokes it with a status saying whether the result was accepted ([Channel Handling of Resolver Results](#3-channel-handling-of-resolver-results)). An implementation MAY return this status to the resolver synchronously from the call that reports the result instead of using a callback. |
+| **ConfigSelector** | If provided, an internal object that picks per-RPC configuration ([Per-call Configuration and Call Flow](05-call-dispatch.md)). It is not part of the public resolver API. Only built-in resolvers such as the xDS resolver provide one. |
+| **Result status callback** | If provided, the channel invokes it with a status saying whether the result was accepted ([Channel Handling of Resolver Results](#3-channel-handling-of-resolver-results)). An implementation MAY return this status to the resolver synchronously from the call that reports the result instead of using a callback. |
 
 ### 2.1 Ordering
 
@@ -95,9 +95,9 @@ OnResolverResult(result):
       config_selector = channel.config_selector
     else:
       // No valid config yet: the channel cannot proceed.
-      status = RewriteControlPlaneStatus(result.service_config.error)
+      status = RestrictControlPlaneStatus(result.service_config.error)
       channel.SetConnectivityState(TRANSIENT_FAILURE, status)
-      channel.FailQueuedRpcsWithoutWaitForReady(status)   // see 04-call-dispatch.md
+      channel.FailQueuedRpcsWithoutWaitForReady(status)   // see 05-call-dispatch.md
       result_status = UNAVAILABLE("no valid service config")
   else:
     service_config = result.service_config
@@ -135,7 +135,7 @@ Notes:
 - The new ConfigSelector MUST NOT be used for any RPC until the LB policy
   has handled the update and published its new picker
   ([Per-call Configuration and Call Flow](05-call-dispatch.md)).
-- `RewriteControlPlaneStatus` applies the status-code restriction in
+- `RestrictControlPlaneStatus` applies the status-code restriction in
   [Control Plane Status Restriction](05-call-dispatch.md#43-control-plane-status-restriction).
   It rewrites codes that gRPC must not generate, such as `NOT_FOUND`, to
   `INTERNAL`.
@@ -207,9 +207,9 @@ connection attempt failed.
   resolver MUST query again with exponential backoff. It SHOULD use the
   connection backoff parameters defined in [Subchannels and Connections](07-subchannels.md).
   The backoff state resets after an accepted result.
-- The resolver API MUST have an operation to reset this backoff. The channel
-  invokes it when the application resets connection backoff
-  ([Channel](02-channel.md)).
+- The resolver API SHOULD have an operation to reset this backoff. If it
+  does, the channel SHOULD invoke it when the application resets connection
+  backoff ([Channel](02-channel.md)).
 
 ## 5. Resolver Errors
 
@@ -253,7 +253,7 @@ The resolver plugin API has three parts. They are specified abstractly here.
 | --- | --- |
 | `Start()` | Starts resolution. Called once. |
 | `RequestReresolution()` | Requests a new resolution ([Re-resolution Requests](#41-re-resolution-requests)). |
-| `ResetBackoff()` | Resets any re-resolution backoff and minimum-interval state, so a pending re-resolution runs right away. |
+| `ResetBackoff()` | Resets any re-resolution backoff and minimum-interval state, so a pending re-resolution runs right away. Not every resolver API has this operation ([Re-resolution Requests](#41-re-resolution-requests)). |
 | `Shutdown()` | Stops the resolver. After it returns, the resolver MUST NOT deliver any more results. |
 
 **Result handler** (implemented by the channel and passed to the resolver):
@@ -280,7 +280,7 @@ gRPC MUST provide the resolvers in this section. The xDS resolver (scheme
 | --- | --- |
 | `host` | The DNS name to resolve, or an IPv4 or IPv6 literal. An IPv6 literal MUST be in square brackets when a port is present, for example `dns:///[2001:db8::1]:8443`. |
 | `port` | The port used for every returned address. Defaults to **443**. |
-| `authority` | Optional. Names the DNS server to query. Whether the authority is supported, its accepted forms, and its default port are implementation-defined (see below). If the authority is empty, the system's DNS configuration is used. |
+| `authority` | If non-empty, names the DNS server to query. Whether the authority is supported, its accepted forms, and its default port are implementation-defined (see below). If the authority is empty, the system's DNS configuration is used. |
 
 How a non-empty authority is handled is implementation-defined. A resolver
 may honor it (for example in `ip[:port]` form, with DNS port 53 by default),
@@ -307,12 +307,17 @@ path without its leading `/`). The default port is not appended.
   the first successful resolution. After that, the last valid service config
   stays in use and the LB policy decides how to handle the endpoints error.
 
-**Service config:** Unless service config lookup is disabled
-([Channel](02-channel.md)), the resolver also looks up the service config in
-DNS TXT records ([Service Config in DNS](#72-service-config-in-dns)). It MUST NOT look up
-TXT records when `host` is `localhost` or an IP literal. In those cases it
-reports no service config. This avoids slow, needless lookups for local and
-literal targets.
+**Service config:** The resolver can also look up the service config in DNS
+TXT records ([Service Config in DNS](#72-service-config-in-dns)). This lookup
+SHOULD be off by default, because it adds a DNS query to every resolution and
+TXT lookups can be slow or fail. gRPC MUST provide a way for the application
+to turn it on. When the lookup is off, or when service config lookup is
+disabled on the channel ([Channel](02-channel.md)), the resolver sends no TXT
+query and reports no service config. Service owners therefore can't rely on a
+published TXT service config being applied by every client. The resolver MUST
+NOT look up TXT records when `host` is `localhost` or an IP literal. In those
+cases it reports no service config. This avoids slow, needless lookups for
+local and literal targets.
 
 **Re-resolution:** The `dns` resolver is a polling resolver. It MUST enforce
 a minimum time between resolutions. The default is 30 seconds. gRPC MUST
@@ -356,26 +361,24 @@ The config value is a JSON **array of service config choices**. This format
 lets service config changes be canary tested. The client uses the **first**
 choice whose criteria all match it:
 
-```
+```json
 [
   {
-    "clientLanguage": [string],
-    "percentage": number,
-    "clientHostname": [string],
-    "serviceConfig": object
-  },
-  ...
+    "clientLanguage": [ "c++", "java" ],
+    "percentage": 20,
+    "clientHostname": [ "host-1" ],
+    "serviceConfig": {}
+  }
 ]
 ```
 
-| Field | Type | Matching rule | Validation |
-| --- | --- | --- | --- |
-| `clientLanguage` | array of strings | Matches if the client's gRPC language name is in the list, compared case-insensitively. Examples of names: `c++`, `java`, `go`, `python`. Absent or empty matches every client. | Must be an array of strings. |
-| `percentage` | integer | Matches if the client's random draw ([below](#percentage-draw)) is less than `percentage`. Absent matches every client. | Must be an integer from 0 to 100 inclusive. |
-| `clientHostname` | array of strings | Matches if the client's hostname, as reported by the system, equals an entry exactly (case-sensitive). Absent or empty matches every client. | Must be an array of strings. |
-| `serviceConfig` | object | — | Required. Must be a JSON object holding a service config ([Service Config](04-service-config.md)). |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `[].clientLanguage` | list of string | No | `[]` | Matches if the client's gRPC language name is in the list, compared case-insensitively (for example, `"c++"`, `"java"`, `"go"`, `"python"`). Absent or empty matches every client. |
+| `[].percentage` | uint32 | No | `100` | Integer in `[0, 100]`. Matches if the client's random draw (specified below) is less than `percentage`. Absent matches every client. |
+| `[].clientHostname` | list of string | No | `[]` | Matches if the client's hostname, as reported by the system, equals an entry exactly (case-sensitive). Absent or empty matches every client. |
+| `[].serviceConfig` | object | Yes | — | JSON object holding a [service config](04-service-config.md). |
 
-<a id="percentage-draw"></a>
 **Percentage draw.** To evaluate `percentage` for a choice, the client draws
 a fresh uniformly random integer in `[0, 99]`. Each choice that has a
 `percentage` gets its own draw, made each time a resolution result is
@@ -413,6 +416,10 @@ service config**, and the channel uses its default service config.
 - The URI MUST NOT have an authority (for example `unix://host/path` is
   invalid).
 - The result has one endpoint with one address.
+- An empty `path` (the target `unix:`) can never work. It is
+  implementation-defined whether the resolver rejects it when the channel is
+  created, returns an empty endpoint list, or returns an address that fails
+  at connect time.
 - **Default authority:** `localhost`.
 
 ### 7.4 `unix-abstract`
@@ -424,7 +431,11 @@ service config**, and the channel uses its default service config.
   process or user can connect to the socket.
 - The implementation adds the leading null byte (`\0`) that abstract socket
   addresses require. The target MUST NOT include it.
+- The URI MUST NOT have an authority.
 - The result has one endpoint with one address.
+- As with an empty `unix` path ([`unix`](#73-unix)), the handling of an
+  empty `abstract_path` (the target `unix-abstract:`) is
+  implementation-defined.
 - **Default authority:** `localhost`.
 
 ### 7.5 `vsock`
@@ -435,6 +446,7 @@ service config**, and the channel uses its default service config.
   machine or the host.
 - `port` is a 32-bit port number that tells apart the services on that
   machine.
+- The URI MUST NOT have an authority.
 - The result has one endpoint with one address.
 - **Default authority:** `cid:port`, the URI path as written in the target.
 
@@ -447,6 +459,12 @@ service config**, and the channel uses its default service config.
 
 - Each comma-separated element is one address and becomes its own endpoint,
   in the order given.
+- Whether an empty element (for example in `ipv4:1.2.3.4,,1.2.3.5`) is
+  skipped or makes the target invalid is implementation-defined. A target
+  with no addresses (for example `ipv4:`) can never work. It is
+  implementation-defined whether the resolver rejects it when the channel is
+  created or returns an empty endpoint list.
+- The URI MUST NOT have an authority.
 - `port` defaults to **443**.
 - For `ipv6`, an address with a port MUST be in square brackets, for example
   `ipv6:[2607:f8b0:400e:c00::ef]:443` or `ipv6:[::]:1234`.
@@ -470,9 +488,9 @@ service config**, and the channel uses its default service config.
   ones, access to the channel's metrics recorder (stats plugin group) for
   recording non-per-call metrics and registering gauge callbacks (see
   [Metrics Framework and OpenTelemetry Plugin](../08-observability/03-metrics-framework.md)).
-- The channel API MUST provide options to:
-  - disable service config lookup by the resolver ([Channel](02-channel.md));
-  - set the minimum time between `dns` resolutions
-    ([`dns`](#71-dns)).
+- The channel API MUST provide an option to disable service config lookup by
+  the resolver ([Channel](02-channel.md)).
+- gRPC MUST provide a way, per channel or for the whole process, to set the
+  minimum time between `dns` resolutions ([`dns`](#71-dns)).
 - gRPC MUST provide a process-wide way to change the default scheme used in
   the target fallback ([Channel](02-channel.md)).

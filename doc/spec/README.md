@@ -6,8 +6,9 @@
 
 This directory contains the specification of gRPC's cross-language behavior:
 the wire protocol, the client channel, the server, security, the standard gRPC
-services, observability, and xDS (proxyless service mesh) support. It describes
-the *current* behavior that all gRPC implementations are expected to provide.
+services, observability, xDS (proxyless service mesh) support, and
+vendor-specific features. It describes the *current* behavior that all gRPC
+implementations are expected to provide.
 
 See [Introduction and Conventions](00-introduction/README.md) for scope,
 requirements language, and how experimental features are marked.
@@ -69,8 +70,9 @@ wait-for-ready; interceptors; codecs; API requirements.
 ### [6. Security](06-security/README.md)
 - [6.1 Security Model](06-security/01-security-model.md): channel, server, call, and composite credentials; security levels; AuthContext; authority override
 - [6.2 TLS](06-security/02-tls.md): versions, ALPN, SNI, hostname and per-RPC authority verification, mTLS, certificate providers, custom verification, CRLs, SPIFFE, private key offloading, key exchange groups
-- [6.3 Call Credentials](06-security/03-call-credentials.md): call credential behavior; access token, GCP service account identity, and JWT token file credentials
+- [6.3 Call Credentials](06-security/03-call-credentials.md): call credential behavior; access token, token-fetching, and JWT token file credentials
 - [6.4 Authorization](06-security/04-authorization.md): RBAC engine, gRPC authorization policy, audit logging
+- [6.5 ALTS](06-security/05-alts.md): ALTS channel and server credentials: handshaker service, RPC protocol versions, peer identity, record protocol
 
 ### [7. Standard Services and Admin Interface](07-services/README.md)
 - [7.1 Health Service](07-services/01-health.md): `grpc.health.v1.Health`: per-service and overall serving status
@@ -93,7 +95,7 @@ wait-for-ready; interceptors; codecs; API requirements.
 - [9.3 XdsClient](09-xds/03-xds-client.md): transport, subscriptions, resource naming and federation, watchers, caching, error handling, fallback
 - 9.4 Resources and Validation
   - [9.4.1 Common Types](09-xds/04-resources/01-common-types.md)
-  - [9.4.2 Listener](09-xds/04-resources/02-listener.md)
+  - [9.4.2 Listener (Client Side)](09-xds/04-resources/02-listener.md)
   - [9.4.3 RouteConfiguration](09-xds/04-resources/03-route-configuration.md)
   - [9.4.4 Cluster](09-xds/04-resources/04-cluster.md)
   - [9.4.5 ClusterLoadAssignment and LbEndpointCollection](09-xds/04-resources/05-endpoint.md)
@@ -104,17 +106,24 @@ wait-for-ready; interceptors; codecs; API requirements.
   - [`xds_cluster_impl`](09-xds/lb-policies/xds_cluster_impl.md)
   - [`xds_override_host`](09-xds/lb-policies/xds_override_host.md)
   - [`xds_wrr_locality`](09-xds/lb-policies/xds_wrr_locality.md)
-- [9.7 xDS HTTP Filters](09-xds/07-http-filters.md): filter framework, router, fault injection, RBAC, stateful session affinity, GCP authentication
+- [9.7 xDS HTTP Filters](09-xds/07-http-filters.md): filter framework, router, fault injection, RBAC, stateful session affinity
 - [9.8 xDS-Enabled Servers](09-xds/08-server.md): serving state, Listener handling, filter chain matching
 - [9.9 xDS Security](09-xds/09-security.md): xDS credentials and TLS configuration
 - [9.10 Load Reporting (LRS)](09-xds/10-load-reporting.md): load reporting to the control plane
 - [9.11 Client Status Discovery Service (CSDS)](09-xds/11-csds.md): exposing xDS configuration for debugging
 
+### [10. Vendor-Specific Features](10-vendor-specific/README.md)
+- [10.1 Google Default Credentials](10-vendor-specific/01-google-default-credentials.md): ALTS-or-TLS channel credentials with Application Default Credentials; ALTS-specific call credentials; compute engine channel credentials; the `google_default` xDS bootstrap type
+- [10.2 Google Cloud-to-Prod (`google-c2p`) Resolver](10-vendor-specific/02-google-c2p-resolver.md): the `google-c2p` target scheme: generated xDS bootstrap, DNS fallback
+- [10.3 GCP Service Account Identity Credentials](10-vendor-specific/03-gcp-service-account-identity-credentials.md): call credentials that fetch an identity JWT from the GCP metadata server
+- [10.4 GCP Authentication Filter](10-vendor-specific/04-gcp-authentication-filter.md): the xDS HTTP filter that attaches GCP service account identity credentials with a per-cluster audience
+- [10.5 Google Call Credentials](10-vendor-specific/05-google-call-credentials.md): Application Default Credentials, compute engine, service account, user refresh token, external account, IAM, and GDCH call credentials
+
 ### Appendices
-- [A. Reserved Metadata Keys](appendices/a-metadata-keys.md)
+- [A. Reserved and Well-Known Metadata Keys](appendices/a-metadata-keys.md)
 - [B. Environment Variables](appendices/b-environment-variables.md)
 - [C. Protocol Buffer and JSON Schema Index](appendices/c-schemas.md)
 - [D. gRFC Traceability Matrix](appendices/d-traceability.md)
 - [E. Historical and Superseded Behavior](appendices/e-historical.md)
-- [F. Conformance and Interop Tests](appendices/f-conformance.md)
+- [F. Conformance and Interoperability Tests](appendices/f-conformance.md)
 - [G. Glossary](appendices/g-glossary.md)

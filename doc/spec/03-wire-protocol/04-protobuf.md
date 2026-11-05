@@ -19,7 +19,7 @@ defines how a Protocol Buffers service maps onto the wire protocol in
 Service-Name     = ?( {proto package name} "." ) {service name}
 Method-Name      = {method name as declared in the service}
 Message-Type     = {fully qualified proto message name}
-Content-Type     = "application/grpc+proto"     ; "application/grpc" is equivalent
+Content-Type     = "application/grpc" / "application/grpc+proto"
 Status-Details   = {serialized google.rpc.Status message}
 ```
 
@@ -50,8 +50,10 @@ Status-Details   = {serialized google.rpc.Status message}
 ## 2. Message Encoding (`+proto`)
 
 - Each `Message` in a `Length-Prefixed-Message` is the protobuf binary
-  serialization of one request or response message. It is then compressed if
-  the Compressed-Flag is 1.
+  serialization of one request or response message. Standard non-deterministic
+  protobuf binary serialization is valid (deterministic map-key or unknown-field
+  ordering is not required). The serialized payload is then compressed if the
+  Compressed-Flag is 1.
 - An empty message serializes to zero bytes, which is valid.
 - `content-type: application/grpc` with no content-subtype means `+proto`.
 - If a received message cannot be parsed, the call fails with `INTERNAL`.
@@ -84,7 +86,8 @@ with the method's default codec.
   }
   ```
 
-  It is binary metadata, so it is base64-encoded on the wire
+  It is binary metadata, so it is base64-encoded on the wire unless
+  [True binary metadata](02-true-binary-metadata.md) is used
   ([Binary values](01-http2.md#43-binary-values)).
 - Senders MUST set `Status.code` to the same value as `grpc-status`, and
   `Status.message` to the same string as the (decoded) `grpc-message`.
@@ -102,7 +105,8 @@ with the method's default codec.
   discovered at runtime through server reflection
   ([Server reflection](../07-services/02-reflection.md)).
 - The standard services ([Standard services](../07-services/README.md)) are
-  defined in protobuf in grpc-proto, for example `grpc/health/v1/health.proto`.
+  defined in protobuf in `grpc-proto`, for example
+  [`grpc/health/v1/health.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto).
 
 ## 6. API Requirements
 

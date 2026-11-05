@@ -5,7 +5,7 @@
 
 # `round_robin` LB Policy
 
-<!-- Sources: doc/load-balancing.md, grpc/service_config/service_config.proto (RoundRobinConfig), A61, A88 -->
+<!-- Sources: doc/load-balancing.md, A61, A88 -->
 
 ## 1. Overview
 
@@ -18,8 +18,6 @@ endpoint connected at all times.
 Registered name: `round_robin`.
 
 ## 2. Configuration
-
-Proto: `RoundRobinConfig` in `grpc/service_config/service_config.proto`.
 
 ```json
 { "round_robin": {} }
@@ -99,7 +97,7 @@ children do ([`pick_first`](pick_first.md)). First match wins:
 | --- | --- | --- |
 | At least one child READY | READY | Round-robin over READY children. |
 | At least one child CONNECTING (or IDLE) | CONNECTING | Queue all picks. |
-| Otherwise (all children TRANSIENT_FAILURE) | TRANSIENT_FAILURE | Fail picks with an error that includes the most recent connection failure and the resolution note. For example, delegate to the picker of the child that reported the most recent failure. |
+| Otherwise (all children TRANSIENT_FAILURE) | TRANSIENT_FAILURE | Fail picks with an error that includes a child's connection failure and the resolution note (for example, delegate to the picker of a failing child, or round-robin across the failing children's pickers). |
 
 The aggregate state is recomputed and a new picker reported whenever a
 child reports a new state ([Calls From Children](#52-calls-from-children)).
@@ -148,7 +146,7 @@ The CONNECTING and TRANSIENT_FAILURE pickers are specified in
 
 `round_robin` creates one `pick_first` child per endpoint, with the
 child's internal health-reporting option enabled
-([Update](#33-updates-from-the-parent)). Each child receives its endpoint with that
+([Updates from the Parent](#33-updates-from-the-parent)). Each child receives its endpoint with that
 endpoint's attributes, plus the resolution note and the top-level
 attributes.
 

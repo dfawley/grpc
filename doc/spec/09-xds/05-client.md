@@ -140,12 +140,11 @@ Listener resource name.
   resolver MUST ask the XdsDependencyManager to request re-resolution on the
   DNS resolver of **every** LOGICAL_DNS cluster in the current config. xDS
   resources are watched, so re-resolution has no other effect.
-- **Reset backoff**: the resolver MUST reset the XdsClient's backoff and the
-  backoff of every LOGICAL_DNS DNS resolver.
+- **Reset backoff** (if the resolver API has this operation): the resolver
+  SHOULD reset the XdsClient's backoff and the backoff of every LOGICAL_DNS
+  DNS resolver.
 - **Shutdown**: destroy the XdsDependencyManager, which cancels all of its
   watches and DNS resolvers, and release the XdsClient.
-
-<!-- REVIEW(divergence) [XDS_RESOLVER-3]: only C++ does this (xds_resolver.cc ResetBackoffLocked resets the XdsClient and the LOGICAL_DNS resolvers). Java's resolver API has no reset-backoff call: ManagedChannelImpl.resetConnectBackoff calls refresh(), which only re-resolves LOGICAL_DNS clusters. Go's resolver API has none either: ClientConn.ResetConnectBackoff only touches subchannels. Neither resets the ADS stream backoff. Spec says: reset backoff MUST reset the XdsClient's backoff and every LOGICAL_DNS resolver's (and API Requirements: the resolver API MUST let the channel reset backoff). -->
 
 ## 2. XdsDependencyManager
 
@@ -248,6 +247,8 @@ def Expand(name, depth, leaf_list, notes):
   mark name visited; ensure CDS watch for name
   if CDS resource for name not yet received: return false
   if CDS watch reported an error: record error for name; append error to notes
+                                  # alternatively: append name to leaf_list
+                                  # (see the rules below)
                                   return true
   switch cluster type:
     EDS / LOGICAL_DNS:
@@ -287,16 +288,20 @@ Rules:
   another aggregate cluster, still contributes its leaf clusters to every
   aggregate cluster that lists it, directly or indirectly.
 - An underlying cluster whose CDS resource does not exist, or has an error
-  with no cached resource, MUST be **skipped**. It does not fail the
-  aggregate cluster. Its error is added to the aggregate cluster's resolution
-  note. If, after all resources are obtained, an aggregate cluster has no leaf
+  with no cached resource, MUST NOT fail the aggregate cluster. An
+  implementation MUST do one of the following:
+  - **Skip** it: leave it out of the leaf list and add its error to the
+    aggregate cluster's resolution note (as in the pseudo-code above).
+  - Keep it in the leaf list as a leaf cluster whose `XdsConfig` entry is its
+    error, so that the `priority` child generated for it always reports
+    TRANSIENT_FAILURE and the next priority is used.
+
+  If, after all resources are obtained, an aggregate cluster has no leaf
   clusters, its entry in the `XdsConfig` MUST be an UNAVAILABLE error, so that
   RPCs routed to it fail.
 - Every cluster visited (aggregate, leaf, or failed) MUST have an entry in the
   `XdsConfig` cluster map. This includes aggregate clusters that are not
   roots.
-
-<!-- REVIEW(divergence) [XDS_DEPMGR-3]: only C++ skips failed underlying clusters. Go propagates an underlying cluster's CDS error (does-not-exist or error with no cached resource) and fails the whole aggregate and every aggregate above it (xds_dependency_manager.go populateClusterConfigLocked lastErr, populateAggregateClusterLocked). Java adds the failed cluster to the leaf list, so priority gets a child that always fails (gRFC A74's other option; XdsDependencyManager.addConfigForCluster). Java also gives an aggregate on a cycle an INTERNAL "Aggregate cluster cycle detected" error, even when the cycle has leaves (C++ DependencyLoopWithLeafClusters test expects success). And Java's depth check allows one more level (ancestors.size() > 16), uses INTERNAL, and does not pass the error to aggregates above. Envoy skips absent clusters (aggregate/cluster.cc linearizePrioritySet). Spec says: skip and add to the note; UNAVAILABLE max-depth error passed up; cycles just end the traversal. -->
 
 ### 2.4 LOGICAL_DNS clusters
 
@@ -389,8 +394,6 @@ If all of these are empty, the resolution note MUST instead be
 `xDS node ID:<node id>` (from the bootstrap), so that error messages identify
 the client to the operator. LB policies include the resolution note in the
 errors of failed picks (see [Load Balancing](../04-client-channel/06-load-balancing.md)).
-
-<!-- REVIEW(divergence) [XDS_DEPMGR-4]: only C++ builds the note this way (xds_dependency_manager.cc On*AmbientError, GenerateResolutionNoteForCluster). Java stores ambient errors in a field that is never read and does not republish (XdsDependencyManager.XdsWatcherBase.onAmbientError); its EndpointConfig has no resolution note, only a StatusOr. Go only logs ambient errors (onListenerResourceAmbientError, onClusterAmbientError, onEndpointAmbientError), and its note is just the EDS/DNS error (populateEDSClusterLocked); it puts the node ID into error messages instead of the note. So in Java and Go, a lost xDS stream never shows up in RPC failures, and ambient errors trigger no new config. Spec (and gRFC A88 "Handling Ambient Errors") says: note = LDS, RDS, CDS ambient errors + endpoint note, else `xDS node ID:<id>`. -->
 
 An aggregate cluster's `resolution_note` is the `"; "`-joined list of errors
 for the underlying clusters that were skipped.
@@ -517,6 +520,9 @@ not wait_for_ready with UNAVAILABLE and a message that includes the error.
 
 ### 4.1 Generated service config
 
+> **Experimental:** The LB policy names `xds_cluster_manager_experimental` and
+> `cds_experimental` still carry the `_experimental` suffix.
+
 The generated service config contains only a `loadBalancingConfig` that
 selects `xds_cluster_manager_experimental`, with one child per entry in the
 resolver's cluster reference map
@@ -549,20 +555,22 @@ For the RLS plugin, that is an `rls_experimental` config whose children are
 `cds_experimental` policies with `isDynamic` set:
 
 ```json
-"cluster_specifier_plugin:rls_plugin": {
-  "childPolicy": [ { "rls_experimental": {
-    "routeLookupConfig": { ... },
-    "childPolicy": [ { "cds_experimental": { "isDynamic": true } } ],
-    "childPolicyConfigTargetFieldName": "cluster"
-  } } ]
+{
+  "cluster_specifier_plugin:rls_plugin": {
+    "childPolicy": [ { "rls_experimental": {
+      "routeLookupConfig": {
+        "lookupService": "rls.example.com:443",
+        "grpcKeybuilders": [ { "names": [ { "service": "example.Service" } ] } ]
+      },
+      "childPolicy": [ { "cds_experimental": { "isDynamic": true } } ],
+      "childPolicyConfigTargetFieldName": "cluster"
+    } } ]
+  }
 }
 ```
 
 The service config does not contain `methodConfig` entries. Per-method
 settings (timeout and retry policy) come from the ConfigSelector.
-
-> **Experimental:** The LB policy names `xds_cluster_manager_experimental` and
-> `cds_experimental` still carry the `_experimental` suffix.
 
 ## 5. xDS ConfigSelector
 
@@ -582,8 +590,13 @@ of each RPC, with the RPC's method path and initial metadata, and it produces:
    call's cluster reference;
 5. or an error status that fails the RPC.
 
-Two ConfigSelectors are equal if their Listener and RouteConfiguration are
-equal, since all other ConfigSelector state is derived from those.
+If an implementation skips replacing the channel's ConfigSelector when only
+cluster or endpoint resources change (because routing and per-route filter
+chains depend only on the Listener and RouteConfiguration), any xDS HTTP
+filter state that reads cluster data (such as cluster metadata for GCP
+authentication; see [xDS HTTP Filters](07-http-filters.md)) MUST still observe
+the latest `XdsConfig` rather than a stale snapshot captured when an earlier
+ConfigSelector was built.
 
 ### 5.1 Route matching
 
@@ -638,24 +651,28 @@ The selected `xds_cluster_manager` child name (`cluster:<name>` or
 MAY change it before cluster selection completes; for example, stateful session
 affinity can override it with a cluster from a session cookie (see
 [xDS HTTP Filters](07-http-filters.md)). An xDS HTTP filter MUST only set it to a
-cluster that the matched route references. The **route call attribute** exposes a
-"does the route reference cluster X" check for this purpose. For a route that
-uses a cluster specifier plugin, the check is false for every cluster.
+cluster that the matched route references. To enforce this, the ConfigSelector
+makes the set of clusters referenced by the matched route available to xDS HTTP
+filters (empty for a route that uses a cluster specifier plugin).
 
 ### 5.3 Call attributes
 
-The ConfigSelector MUST make the following available to the xDS HTTP filters
-and to the LB policy pickers for the RPC:
+The ConfigSelector MUST make the following logical per-RPC data available to
+the xDS HTTP filters and to the LB policy pickers for the RPC:
 
 | Attribute | Contents | Consumers |
 | --- | --- | --- |
-| Cluster | `xds_cluster_manager` child name of the selected cluster (`cluster:<name>`) or plugin (`cluster_specifier_plugin:<name>`) | `xds_cluster_manager` picker; stateful session xDS HTTP filter |
+| Cluster | `xds_cluster_manager` child name of the selected cluster (`cluster:<name>`) or plugin (`cluster_specifier_plugin:<name>`) | `xds_cluster_manager` picker; stateful session and GCP authentication xDS HTTP filters |
 | Request hash | 64-bit hash for the RPC ([Request hash](#55-request-hash)) | `ring_hash` picker (see [ring_hash](../04-client-channel/lb-policies/ring_hash.md)) |
-| Route | The matched route, including its `auto_host_rewrite` flag, and a check for whether the route references a given cluster | `xds_cluster_impl` picker (authority rewriting); stateful session xDS HTTP filter |
-| XdsConfig | The `XdsConfig` the ConfigSelector was built from | xDS HTTP filters that need cluster data, e.g. cluster metadata for GCP authentication (see [xDS HTTP Filters](07-http-filters.md)) |
+| Auto-host-rewrite | Boolean indicating whether the matched route enables authority rewriting ([Authority rewriting](#59-authority-rewriting)) | `xds_cluster_impl` picker |
+| Route clusters | The set of clusters referenced by the matched route (`cluster` or `weighted_clusters`; empty for `cluster_specifier_plugin`) | Stateful session xDS HTTP filter |
+| XdsConfig | The latest `XdsConfig` | xDS HTTP filters that need cluster data, e.g. cluster metadata for GCP authentication (see [GCP Authentication Filter](../10-vendor-specific/04-gcp-authentication-filter.md)) |
 
-The route attribute also holds a reference to the ConfigSelector's
-route/cluster table until cluster selection completes
+The exact mechanism used to pass this state between the ConfigSelector, xDS
+HTTP filters, and LB pickers (for example, individual call attributes, a
+combined route attribute, or filter-chain state) is implementation-defined,
+provided any cluster-reference table needed before cluster selection completes
+is kept alive until finalization
 ([Cluster references and two-phase removal](#54-cluster-references-and-two-phase-removal)).
 
 ### 5.4 Cluster references and two-phase removal
@@ -747,7 +764,9 @@ and the HttpConnectionManager:
 
 The channel applies the timeout as it applies a service config timeout: the
 RPC's effective deadline is the earlier of the application's deadline and
-now + timeout. xDS configuration MUST never extend the application's deadline.
+the RPC's start time plus `timeout` (see
+[Per-call Configuration and Call Flow](../04-client-channel/05-call-dispatch.md#32-applying-the-method-config)).
+xDS configuration MUST never extend the application's deadline.
 
 | Application deadline | `grpc_timeout_header_max` | `max_stream_duration` (route, else HCM) | Effective timeout |
 | --- | --- | --- | --- |
@@ -799,7 +818,8 @@ specified in [xDS HTTP Filters](07-http-filters.md).
 
 > **Introduced by:** [gRFC A81: xDS Authority Rewriting](https://github.com/grpc/proposal/blob/master/A81-xds-authority-rewriting.md)
 
-The route attribute carries the route's `auto_host_rewrite` flag. That flag is
+For each RPC, the ConfigSelector passes the matched route's `auto_host_rewrite`
+flag to load balancing ([Call attributes](#53-call-attributes)). That flag is
 set only when the RouteConfiguration came from an xDS server with the
 `trusted_xds_server` server feature (see [Bootstrap](02-bootstrap.md) and
 [RouteConfiguration](04-resources/03-route-configuration.md)). The
@@ -816,7 +836,8 @@ set only when the RouteConfiguration came from an xDS server with the
 - The resolver API MUST let a resolver return, together with a result: a
   ConfigSelector, top-level attributes (XdsClient, XdsConfig, cluster
   subscription interface), and a resolution note. It MUST let the channel ask
-  the resolver to re-resolve and to reset backoff.
+  the resolver to re-resolve, and SHOULD let the channel ask the resolver to
+  reset backoff.
 - The ConfigSelector API MUST let a ConfigSelector, for each RPC: return a
   method config; attach call attributes that xDS HTTP filters and LB pickers
   can read (and filters can modify); supply the per-RPC xDS HTTP filter chain;

@@ -5,7 +5,7 @@
 
 # 4.9 HTTP CONNECT Proxy Support
 
-<!-- Sources: A1 (use cases 1 and 2), doc/core/default_http_proxy_mapper.md -->
+<!-- Sources: A1 (use cases 1 and 2), A86, doc/core/default_http_proxy_mapper.md, doc/environment_variables.md -->
 
 > **Introduced by:** [gRFC A1: HTTP CONNECT Proxy Support](https://github.com/grpc/proposal/blob/master/A1-http-connect-proxy-support.md)
 
@@ -179,9 +179,11 @@ The client then reads the proxy's HTTP/1.1 response:
   SNI and verification (for xDS-configured proxies, the cluster's security
   configuration applies instead; see [xDS-Configured Proxies](#5-xds-configured-proxies)),
   and then HTTP/2 setup (see [Subchannels and Connections](07-subchannels.md)).
-- **Any other status, or a malformed response:** the connection attempt
-  fails, with a status whose message includes the HTTP status line.
-  Normal connection backoff applies.
+- **Any other status:** the connection attempt fails, with a status whose
+  message includes the HTTP status code (or status line). Normal connection
+  backoff applies.
+- **Malformed response or premature EOF:** the connection attempt fails,
+  and normal connection backoff applies.
 
 ## 5. xDS-Configured Proxies
 

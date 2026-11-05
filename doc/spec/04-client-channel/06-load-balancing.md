@@ -5,7 +5,7 @@
 
 # 4.6 Load Balancing
 
-<!-- Sources: doc/load-balancing.md, grpc-proto grpc/service_config/service_config.proto, A24, A51 (client side), A54, A56, A61, A62, A78, A81, A79, A88, A89, A108 -->
+<!-- Sources: doc/load-balancing.md, A24, A51 (client side), A54, A56, A58, A61, A62, A78, A79, A81, A88, A89, A94, A108, A113 -->
 
 Load balancing in gRPC is performed per call, not per connection: even
 when all calls come from a single client, each call is load-balanced
@@ -79,12 +79,13 @@ entry for a policy is a factory with two operations:
 | **ParseConfig(json)** | Parses and validates the policy's configuration from its JSON form and returns either a parsed config object or a validation error. Called during [service config](04-service-config.md) parsing (typically from the resolver), and by parent policies when parsing child-policy configs. |
 | **CreatePolicy(helper)** | Creates a new instance of the policy. The helper is the object the new policy uses to communicate with its parent. A parent policy MAY also pass builder options: values fixed for the lifetime of the child instance. |
 
-An LB policy configuration is expressed as a `LoadBalancingConfig` list
-(see `grpc/service_config/service_config.proto`). Each list element is a
-JSON object with exactly one key, the policy name, whose value is that
-policy's config. The same list form is used both for the service config's
-`loadBalancingConfig` field and for every child-policy field inside a
-policy config (for example, `childPolicy`). A list is resolved as follows:
+An LB policy configuration is expressed as a
+[`loadBalancingConfig`](04-service-config.md#52-loadbalancingconfig) list.
+Each list element is a JSON object with exactly one key, the policy name,
+whose value is that policy's config. The same list form is used both for the
+service config's `loadBalancingConfig` field and for every child-policy field
+inside a policy config (for example, `childPolicy`). A list is resolved as
+follows:
 
 1. Iterate over the list in order and select the first element whose
    policy name is present in the registry.
@@ -100,8 +101,7 @@ and for how the channel chooses the top-level policy when the service
 config specifies none (the default is `pick_first`).
 
 Policy names that end in `_experimental` denote policies whose
-configuration interface is not yet stable. Such names are marked
-experimental wherever they appear in this spec.
+configuration interface is not yet stable.
 
 ## 3. Resolver Updates: Endpoints, Addresses, and Attributes
 
@@ -122,16 +122,18 @@ significant to an LB policy (for example, `pick_first` connects in order).
 Attributes are the mechanism for passing information between the
 resolver and LB policies, and from parent policies to their children. The
 representation of attributes is implementation-defined. The following
-attributes have defined semantics in this spec:
+attributes have defined semantics:
 
 | Attribute | Level | Set by | Used by |
 | --- | --- | --- | --- |
 | Hierarchical path | Endpoint | xDS policies, or any parent that routes endpoints to named children | `priority`, `weighted_target` ([Hierarchical Address Paths](#94-hierarchical-address-paths)) |
 | Endpoint weight | Endpoint | xDS (EDS) or a custom resolver | `ring_hash`, `pick_first` (shuffling) |
 | Endpoint hash key (`hash_key`) | Endpoint | xDS (EDS metadata) or a custom resolver | `ring_hash` |
-| Locality name | Top-level (as passed to a child) | `weighted_target` | `weighted_round_robin` metrics label `grpc.lb.locality` |
-| Backend service | Top-level | xDS | `weighted_round_robin` metrics label `grpc.lb.backend_service` |
+| Locality name | Top-level (as passed to a child), or endpoint/subchannel | `weighted_target`, or xDS (`cds`) | `weighted_round_robin` and subchannel metrics label `grpc.lb.locality` ([Metric Catalog](../08-observability/04-metrics.md)) |
+| Backend service | Top-level, or endpoint/subchannel | xDS (`cds`) | `weighted_round_robin`, `outlier_detection`, and subchannel metrics label `grpc.lb.backend_service` ([Metric Catalog](../08-observability/04-metrics.md)) |
 | Hostname | Endpoint | xDS (EDS, logical DNS) | xDS authority rewriting ([Authority Override](#66-authority-override)) |
+| Per-address or per-endpoint authority | Address or endpoint | Custom resolver | Default authority for calls routed to that address or endpoint ([Channel: Authority Overrides](02-channel.md#32-authority-overrides)) |
+| HTTP CONNECT proxy | Address or endpoint | Proxy mapper or xDS | Subchannel connection establishment via HTTP CONNECT ([HTTP CONNECT Proxy Support](09-proxy.md)) |
 | Internal health-reporting option | Top-level, or a builder option | Petiole policies | `pick_first` ([Health Reporting Under Petiole Policies](lb-policies/pick_first.md#health-reporting-under-petiole-policies)) |
 | Max connections per subchannel | Top-level, or per subchannel creation | Channel (from service config) or xDS | Subchannel ([Subchannels and Connections](07-subchannels.md)) |
 
@@ -161,7 +163,7 @@ An LB policy instance provides the following operations to its parent:
 | --- | --- |
 | **Update(update) → status** | Delivers a new update ([Resolver Updates: Endpoints, Addresses, and Attributes](#3-resolver-updates-endpoints-addresses-and-attributes)). The policy creates, retains, or removes subchannels or children as needed and then reports its state and a picker through the helper. It returns OK if it accepted the update, or a non-OK status if it rejected it. |
 | **ExitIdle()** | Asks the policy to leave IDLE and begin connecting. A no-op for policies that do not use IDLE. Parents forward it to children as appropriate. |
-| **ResetBackoff()** | Asks the policy to reset connection backoff for all of its subchannels and to forward the request to its children, so that the next connection attempt is not delayed. Triggered by the channel API for resetting backoff ([Channel](02-channel.md)). |
+| **ResetBackoff()** | Asks the policy to reset connection backoff for all of its subchannels and for resources it owns (such as a control channel or a cache's backoff state), and to forward the request to its children, so that the next connection attempt is not delayed. Triggered by the channel API for resetting backoff ([Channel](02-channel.md)). The channel resets the backoff of all of its subchannels directly. Whether the channel's reset also reaches LB policies through this operation is implementation-defined. |
 | **Shutdown()** | Destroys the policy. The policy MUST release all of its subchannels and child policies and cancel its timers, and MUST NOT call its helper afterward. |
 
 ### 4.1 Update Status
@@ -254,7 +256,7 @@ channel invokes synchronously for each call attempt.
 | --- | --- |
 | Method | The full method path of the call (`/package.Service/Method`). |
 | Request metadata | The call's initial metadata (read-only), as it will be sent on the wire, excluding headers that the transport adds. |
-| Call attributes | Per-call values set by the [ConfigSelector](05-call-dispatch.md) or by interceptors, such as the xDS cluster name, the request hash used by `ring_hash`, the route's authority-rewrite setting, or the stateful session override address list. |
+| Call attributes | Per-call values set by the ConfigSelector ([Per-call Configuration and Call Flow](05-call-dispatch.md)) or by interceptors, such as the xDS cluster name, the request hash used by `ring_hash`, the route's authority-rewrite setting, or the stateful session override address list. |
 | Call attempt tracer access | A way for the picker to set per-call metric labels ([Picker-Supplied Metric Labels](#65-picker-supplied-metric-labels)). |
 | Custom telemetry label | The call's custom per-call telemetry label, if the application set one (empty otherwise). **Experimental.** See [Instrumentation Architecture](../08-observability/02-instrumentation.md). |
 
@@ -325,9 +327,9 @@ accounting until then.
 
 ### 6.5 Picker-Supplied Metric Labels
 
-> **Introduced by:** [gRFC A78: gRPC OTel Metrics for WRR, Pick First, and XdsClient](https://github.com/grpc/proposal/blob/master/A78-grpc-metrics-wrr-pf-xds.md)
+> **Introduced by:** [gRFC A78: gRPC OTel Metrics for WRR, Pick First, and XdsClient](https://github.com/grpc/proposal/blob/master/A78-grpc-metrics-wrr-pf-xds.md), [gRFC A89: Backend Service Metric Label](https://github.com/grpc/proposal/blob/master/A89-backend-service-metric-label.md)
 
-A picker can set optional per-call metric labels on the call attempt's
+A picker can set per-call metric labels on the call attempt's
 tracer. Two labels are defined:
 
 | Label | Meaning |
@@ -366,7 +368,7 @@ The interface that LB policies see provides:
 | **Connectivity state watch** | Start or stop receiving the subchannel's raw [connectivity state](07-subchannels.md) (IDLE, CONNECTING, READY, TRANSIENT_FAILURE), plus the failure status in TRANSIENT_FAILURE. Policies normally start the watch when they create the subchannel and keep it until they release the subchannel. The watch can be part of subchannel creation. |
 | **Health state watch** | Start or stop receiving the subchannel's [health state](#10-generic-health-reporting), which combines the connectivity state with all configured health signals. |
 | **RequestConnection()** | Asks the subchannel to start a connection attempt. Has an effect only in IDLE; a no-op in any other state. |
-| **ResetBackoff()** | Resets the subchannel's connection backoff. |
+| **ResetBackoff()** | Resets the subchannel's connection backoff. Whether this operation is available to LB policies is implementation-defined; the channel's reset reaches every subchannel either way. |
 | **Backend metric OOB watch** | Registers or unregisters a watcher for out-of-band backend metric reports, with a requested reporting interval ([Client-Side Backend Metrics (ORCA)](11-backend-metrics.md)). This is one of the connection-scoped watchers specified in [Subchannels and Connections: Connection-Scoped Watchers and Streams](07-subchannels.md#9-connection-scoped-watchers-and-streams). |
 | **Address** | Returns the subchannel's address. |
 | **Release** | Releases the policy's reference to the subchannel. A subchannel with no remaining references is shut down. |
@@ -397,11 +399,9 @@ aggregate the states of their subchannels or children, using these
 Policies SHOULD use these rules unless they have a specific reason to
 differ. One standard variation applies to policies that keep every child
 connected (`round_robin`, `weighted_round_robin`, `least_request`):
-**IDLE counts as CONNECTING.** Because these policies immediately ask an
-IDLE child to connect, an IDLE child is counted as CONNECTING. This rule
-comes from [gRFC A58: `weighted_round_robin` LB policy](https://github.com/grpc/proposal/blob/master/A58-client-side-weighted-round-robin-lb-policy.md),
-which states that when a subchannel reports IDLE the policy immediately
-requests a connection and treats it as CONNECTING for aggregation.
+**IDLE counts as CONNECTING.** When a child reports IDLE, these policies
+immediately ask it to connect (`ExitIdle()`) and treat it as CONNECTING for
+state aggregation.
 The variation applies only because these policies call `ExitIdle()` on a
 child as soon as it reports IDLE, so the IDLE state is momentary. A policy
 that does not automatically exit IDLE on its children (for example
@@ -607,7 +607,7 @@ servers, either per call, through the call tracker
 ([Call-Completion Tracking](#64-call-completion-tracking)), or out of band, by registering
 an OOB backend metric watcher on a subchannel
 ([Subchannel Interface for LB Policies](#7-subchannel-interface-for-lb-policies)). Both modes are
-specified in [Client-Side Backend Metrics](11-backend-metrics.md). The
+specified in [Client-Side Backend Metrics (ORCA)](11-backend-metrics.md). The
 out-of-band mode uses the connection-scoped watcher and stream mechanism
 specified in [Subchannels and Connections: Connection-Scoped Watchers and Streams](07-subchannels.md#9-connection-scoped-watchers-and-streams).
 
@@ -642,10 +642,6 @@ specified in [Subchannels and Connections: Connection-Scoped Watchers and Stream
 - Applications MUST NOT be able to enable the `pick_first` internal
   health-reporting option except by delegating to `pick_first` from a
   policy acting as a petiole.
-- The channel API MUST provide a way to set the cap on `ring_hash` ring
-  size ([`ring_hash` LB Policy](lb-policies/ring_hash.md)), and to set
-  the Happy Eyeballs Connection Attempt Delay
-  ([`pick_first` LB Policy](lb-policies/pick_first.md)).
 
 ## 15. Provided LB Policies
 

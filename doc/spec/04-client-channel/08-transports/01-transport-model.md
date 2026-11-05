@@ -10,8 +10,9 @@
 This document specifies the abstract client transport: what the channel and
 its subchannels expect of a connection, independent of the wire protocol. The
 concrete transports are specified in
-[HTTP/2 Client Transport](02-http2.md) and
-[HTTP/3 Client Transport](03-http3.md). How each call is encoded on the wire
+[HTTP/2 Client Transport](02-http2.md),
+[HTTP/3 Client Transport](03-http3.md), and
+[In-Process Client Transport](04-in-process.md). How each call is encoded on the wire
 is specified in [Wire Protocol](../../03-wire-protocol/README.md).
 
 ## 1. Overview

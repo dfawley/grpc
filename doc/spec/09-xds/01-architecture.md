@@ -5,7 +5,29 @@
 
 # 9.1 Architecture and Design Principles
 
-<!-- Sources: A27, A28, A30, A36, A40, A46, A47, A53, A57, A71, A74, A81, A88, A95, doc/grpc_xds_features.md, doc/grpc_xds_bootstrap_format.md -->
+<!-- Sources: A27, A28, A30, A36, A40, A46, A47, A53, A57, A71, A74, A81, A88, A95, A102, doc/grpc_xds_features.md, doc/grpc_xds_bootstrap_format.md -->
+
+> **Introduced by:** [gRFC A27: xDS-Based Global Load Balancing](https://github.com/grpc/proposal/blob/master/A27-xds-global-load-balancing.md)
+
+gRPC can obtain its configuration from an xDS management server (also called a
+*control plane*) using the xDS APIs. This lets gRPC clients and servers take
+part in a service mesh without a sidecar proxy ("proxyless service mesh"). The
+xDS APIs are a family of publish/subscribe APIs named "*x* Discovery Service".
+gRPC uses the following resource types:
+
+| API | Resource type (type URL suffix) | Purpose in gRPC |
+| --- | --- | --- |
+| LDS | `envoy.config.listener.v3.Listener` | Client: root of the channel's config (an HTTP API listener). Server: the listener for a serving address. |
+| RDS | `envoy.config.route.v3.RouteConfiguration` | Virtual hosts and routes, used for per-RPC routing. |
+| CDS | `envoy.config.cluster.v3.Cluster` | Cluster config: discovery type, LB policy, security, circuit breaking, outlier detection, load reporting. |
+| EDS | `envoy.config.endpoint.v3.ClusterLoadAssignment` | Endpoints grouped by locality and priority; drop config. |
+| (EDS list collection) | `envoy.config.endpoint.v3.LbEndpointCollection` | Endpoints for one locality, fetched separately from the EDS resource. |
+
+Full type URLs have the form `type.googleapis.com/<resource type>`.
+
+The xDS transport protocol itself is defined by the Envoy and CNCF xDS
+documentation (https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol).
+This section describes gRPC's use of it and where gRPC differs from Envoy.
 
 ## 1. Architecture
 
@@ -117,8 +139,7 @@ flowchart TD
 - gRPC MUST use **xDS v3** only. The ADS method is
   `/envoy.service.discovery.v3.AggregatedDiscoveryService/StreamAggregatedResources`,
   and gRPC requests and accepts only the v3 resource type URLs
-  (`type.googleapis.com/<resource type>`) of the resource types listed in
-  [xDS / Proxyless Service Mesh Support](README.md).
+  (`type.googleapis.com/<resource type>`) of the resource types listed above.
 - gRPC MUST use the **Aggregated Discovery Service (ADS)**, where all resource
   types share one bidirectional stream per xDS server.
 - gRPC MUST use the **state-of-the-world (SotW)** protocol variant. The
@@ -203,9 +224,8 @@ semantics are in [Bootstrap](02-bootstrap.md).
 | --- | --- |
 | `fail_on_data_errors` | On a data error (NACK, LDS/CDS deletion, or a server-reported NOT_FOUND or PERMISSION_DENIED) for a resource that is already cached, drop the cached resource and fail. Without it, keep using the cached resource. |
 | `resource_timer_is_transient_error` | The does-not-exist timer is 30 s instead of 15 s. When it fires, the result is a transient error (UNAVAILABLE, cache state `TIMEOUT`) rather than does-not-exist. |
-| `trusted_xds_server` | The server is trusted for security-sensitive features. This enables authority rewriting (`RouteAction.auto_host_rewrite`). |
+| `trusted_xds_server` | The server is trusted for security-sensitive features. This enables authority rewriting (`RouteAction.auto_host_rewrite`) and honoring `GrpcService` target URIs, credentials, and `initial_metadata` directly without consulting `allowed_grpc_services`. |
 | `ignore_resource_deletion` | Recognized but has no effect. |
-| `xds_v3` | Recognized but has no effect (v3 is always used). |
 
 ## 5. API Requirements
 
@@ -213,7 +233,8 @@ semantics are in [Bootstrap](02-bootstrap.md).
   using a target URI with the `xds` scheme (see [Client](05-client.md)).
 - The server API MUST provide a way to create an xDS-enabled server (see
   [xDS-Enabled Servers](08-server.md)).
-- gRPC MUST provide a way to supply the bootstrap configuration (see
+- gRPC MUST read the bootstrap configuration from the environment variables and
+  MAY provide programmatic ways to supply it (see
   [Bootstrap](02-bootstrap.md)).
 - gRPC MUST provide the CSDS service so that applications can register it on
   a server (see [CSDS](11-csds.md) and

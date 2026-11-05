@@ -12,7 +12,8 @@
 Binary logging records RPCs in a structured binary format, for
 troubleshooting, load testing, and replaying production traffic. Each RPC
 event (headers, messages, half-close, trailers, cancellation) becomes one
-`GrpcLogEntry` message, as defined in `grpc/binlog/v1/binarylog.proto`.
+`GrpcLogEntry` message, as defined in
+[`grpc/binlog/v1/binarylog.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/binlog/v1/binarylog.proto).
 Initial metadata, messages, and trailing metadata are logged as separate
 entries, matching their representation on the wire.
 
@@ -96,25 +97,28 @@ once, with the status delivered to the application.
 | | `status_code` | The gRPC status code (numeric). |
 | | `status_message` | The status message, as text, *before* any transport-specific encoding such as percent-encoding. |
 | | `status_details` | The raw value of `grpc-status-details-bin`, if present: always a serialized `google.rpc.Status`. |
-| `Message` | `length` | Length in bytes of the complete serialized message. |
-| | `data` | The message bytes, possibly truncated to the configured limit or omitted entirely. |
+| `Message` | `length` | Length in bytes of the complete uncompressed serialized message. |
+| | `data` | The uncompressed serialized message bytes, possibly truncated to the configured limit or omitted entirely. |
 
 ### 3.3 Metadata
 
-`Metadata` is a list of `MetadataEntry{key, value}` in order. It contains only
-application-visible metadata. The following entries MUST NOT be logged, and
-omitting them is **not** a truncation:
+`Metadata` is a list of `MetadataEntry{key, value}`. Entries that share a key
+MUST appear in the same order as that key's values in the metadata; the order
+of entries with different keys is implementation-defined. It contains only
+application-visible metadata. The following entries MUST NOT be logged in
+`Metadata`, and omitting them is **not** a truncation:
 
 - entries that gRPC handles internally and that the application does not see:
-  keys beginning with `grpc-` (except `grpc-trace-bin`);
-- transport-specific entries, including `:path`, `:authority`,
+  keys beginning with `grpc-` (except `grpc-trace-bin`; note that
+  `grpc-status-details-bin` is excluded from `Trailer.metadata` and logged in
+  `Trailer.status_details` instead), as well as internal LB headers such as
+  `lb-token`;
+- transport-specific entries, including `:path`, `:authority`, `content-type`,
   `content-encoding`, `user-agent`, `te`, and other HTTP/2 pseudo-headers and
   transport headers;
 - entries added by call credentials. On the client side, all entries added by
   call credentials are excluded. On the server side, only the `authorization`
   header is excluded.
-
-<!-- REVIEW(divergence) [BINARY_LOG-6]: Go does not keep metadata order: it builds `Metadata` by iterating a Go map (metadata.MD), so entry order is random across keys, and header-limit truncation is then applied to that random order, so which entries survive the limit is also random. Java keeps wire order (InternalMetadata.serialize) and truncates in that order. C++ has no binary logging. No gRFC or proto comment mentions order. Spec says: "`Metadata` is a list of `MetadataEntry{key, value}` in order" and "Logged entries keep their relative order." -->
 
 **`grpc-trace-bin` exception.** If `grpc-trace-bin` is present, it MUST
 always be logged. It does not count toward the header size limit. In practice
@@ -143,8 +147,10 @@ The configuration string ([Configuration String](#5-configuration-string)) may s
   size (key length plus value length) of the logged entries stays within `N`
   bytes. Which entries are omitted is implementation-defined: for example, an
   implementation may omit the first entry that would exceed the limit and
-  every entry after it, or omit only the entries that do not fit. Logged
-  entries keep their relative order. If any entry was omitted,
+  every entry after it, or omit only the entries that do not fit. Which
+  entries are omitted may therefore depend on the order of the entries
+  ([Metadata](#33-metadata)). Logged entries keep their relative order. If
+  any entry was omitted,
   `payload_truncated` is true. Excluded entries ([Metadata](#33-metadata))
   and `grpc-trace-bin` do not count toward the limit, and `grpc-trace-bin` is
   logged even when entries before or after it are omitted. `h` without a

@@ -53,14 +53,25 @@ used by a channel with insecure credentials. The ALPN protocol ID is `h3`
 
 ## 3. Draining and Closure
 
-HTTP/3 has `GOAWAY` frames, which serve the same purpose as in HTTP/2
-([GOAWAY](../../03-wire-protocol/01-http2.md#92-goaway)). The client reacts
-to them as described in
-[HTTP/2 Client Transport: Handling GOAWAY](02-http2.md#51-handling-goaway).
+HTTP/3 `GOAWAY` frames
+([RFC 9114 §7.2.6](https://www.rfc-editor.org/rfc/rfc9114#section-7.2.6))
+serve the same graceful-draining purpose as in HTTP/2, and the client reacts to
+them at the subchannel and LB-policy level as described in
+[HTTP/2 Client Transport: Handling GOAWAY](02-http2.md#51-handling-goaway),
+with the following protocol differences:
 
-Requests that a GOAWAY identifies as not processed
-([RFC 9114 §5.2](https://www.rfc-editor.org/rfc/rfc9114#section-5.2)) MUST
-be failed with `UNAVAILABLE`, and they are eligible for transparent retry.
+- An HTTP/3 `GOAWAY` frame carries only a Stream ID, with no error code or
+  debug data.
+- Requests whose Stream ID is **greater than or equal to** the `GOAWAY` Stream
+  ID were not processed by the server
+  ([RFC 9114 §5.2](https://www.rfc-editor.org/rfc/rfc9114#section-5.2)). They
+  MUST be failed with `UNAVAILABLE`, and they are eligible for transparent
+  retry.
+- Connection-level error codes (such as `H3_NO_ERROR` and `H3_EXCESSIVE_LOAD`)
+  are carried in QUIC `CONNECTION_CLOSE` frames
+  ([RFC 9000 §19.19](https://www.rfc-editor.org/rfc/rfc9000#section-19.19))
+  rather than in `GOAWAY` (see
+  [gRPC over HTTP/3: Errors](../../03-wire-protocol/03-http3.md#23-errors)).
 
 ## 4. Liveness
 
@@ -70,7 +81,8 @@ no PING frame of its own. Keepalive MAY use QUIC PING frames
 ([RFC 9000 §19.2](https://www.rfc-editor.org/rfc/rfc9000#section-19.2)) or
 the QUIC idle timeout
 ([RFC 9000 §10.1](https://www.rfc-editor.org/rfc/rfc9000#section-10.1))
-instead of HTTP/2 PING.
+instead of HTTP/2 PING. `TCP_USER_TIMEOUT` does not apply to HTTP/3, because
+QUIC runs over UDP and manages retransmission and loss detection itself.
 
 ## 5. API Requirements
 

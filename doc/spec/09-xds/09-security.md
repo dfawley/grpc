@@ -73,9 +73,9 @@ determines client transport security. In the table, `UpstreamTlsContext` is
 | `Http11ProxyUpstreamTransport` | HTTP CONNECT wrapper ([HTTP CONNECT and TLS](#6-http-connect-and-tls)). Its nested `transport_socket` MUST be unset or contain an `UpstreamTlsContext`, which is validated and used exactly as if it had been in `Cluster.transport_socket`. Any other nested type → NACK. |
 | any other type | NACK. |
 
-`Cluster.transport_socket_matches` is ignored.
-
-<!-- REVIEW(divergence) [XDS_CDS-3]: Java (XdsClusterResource.java) and Go (unmarshal_cds.go securityConfigFromCluster) NACK a Cluster with non-empty transport_socket_matches; C++ (xds_cluster_parser.cc) ignores it. Java and Go also NACK a transport_socket whose name is not "envoy.transport_sockets.tls" (CDS and LDS; Java exempts Http11ProxyUpstreamTransport by type), while C++ and the spec use only the typed_config type. A29 says for LDS that a transport_socket name other than envoy.transport_sockets.tls is NACKed, and for CDS only that transport_socket_matches is not supported. Ignoring transport_socket_matches can drop TLS that the control plane meant for some endpoints, which the spec's own rule ("a field whose being ignored would compromise security ... causes a NACK") argues against. Spec says: transport_socket_matches ignored; type-based selection only. -->
+`Cluster.transport_socket.name` (and the `name` of a nested
+`transport_socket`) is ignored; only the `typed_config` type selects the
+behavior. A non-empty `Cluster.transport_socket_matches` → NACK.
 
 The `UpstreamTlsContext` and `DownstreamTlsContext` messages MUST be given in
 serialized protobuf form. A `TypedStruct` whose inner type is one of them is
@@ -204,6 +204,7 @@ they apply. Implementations MAY also accept the deprecated top-level
 | `ca_certificate_provider_instance` | CA certificates or SPIFFE trust bundle map. `instance_name` MUST name a bootstrap instance, else NACK. |
 | `system_root_certs` | Client: used if `ca_certificate_provider_instance` is unset ([`UpstreamTlsContext` Validation](#22-upstreamtlscontext-validation)). Server: see [Server Side: `DownstreamTlsContext`](#7-server-side-downstreamtlscontext). |
 | `match_subject_alt_names` | Client: used per [Server Identity Verification](#3-server-identity-verification). Server: see [Server Side: `DownstreamTlsContext`](#7-server-side-downstreamtlscontext). Each entry MUST be a valid `StringMatcher`, else NACK. |
+| `match_typed_subject_alt_names` | NACK if non-empty. It is not supported, and ignoring it would skip peer SAN verification ([XdsChannelCredentials and XdsServerCredentials](#1-xdschannelcredentials-and-xdsservercredentials)). |
 | `verify_certificate_spki` | NACK if present. |
 | `verify_certificate_hash` | NACK if present. |
 | `require_signed_certificate_timestamp` | NACK if true. |
@@ -217,13 +218,17 @@ they apply. Implementations MAY also accept the deprecated top-level
 ## 5. Certificate Provider Instances
 
 Certificate provider instances are defined in the bootstrap
-`certificate_providers` map ([Bootstrap](02-bootstrap.md)):
+`certificate_providers` map ([Bootstrap](02-bootstrap.md#44-certificate-provider-instances)):
 
-```jsonc
-"certificate_providers": {
-  "<instance_name>": {
-    "plugin_name": "<plugin implementation name>",
-    "config": { /* plugin-specific; optional if the plugin needs none */ }
+```json
+{
+  "certificate_providers": {
+    "default_cert": {
+      "plugin_name": "file_watcher",
+      "config": {
+        "ca_certificate_file": "/etc/certs/ca.pem"
+      }
+    }
   }
 }
 ```
@@ -252,15 +257,25 @@ provider implementations.
 ### 5.1 `file_watcher` Plugin
 
 The only provider plugin is `file_watcher`, which periodically reads PEM files
-from the local file system. Configuration:
+from the local file system.
 
-| Field | Type | Description |
-|---|---|---|
-| `certificate_file` | string | Path to the PEM identity certificate (chain). |
-| `private_key_file` | string | Path to the PEM private key (PKCS). |
-| `ca_certificate_file` | string | Path to the PEM CA certificates (trust bundle). |
-| `spiffe_trust_bundle_map_file` | string | Path to a SPIFFE trust bundle map (JSON). |
-| `refresh_interval` | string (JSON `google.protobuf.Duration`) | How often to re-read the files. Default `"600s"`. |
+```json
+{
+  "certificate_file": "/etc/certs/cert.pem",
+  "private_key_file": "/etc/certs/key.pem",
+  "ca_certificate_file": "/etc/certs/ca.pem",
+  "spiffe_trust_bundle_map_file": "/etc/certs/spiffe_bundle_map.json",
+  "refresh_interval": "600s"
+}
+```
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `certificate_file` | string | No | Unset | Path to the PEM identity certificate (chain). |
+| `private_key_file` | string | No | Unset | Path to the PEM private key (PKCS). |
+| `ca_certificate_file` | string | No | Unset | Path to the PEM CA certificates (trust bundle). |
+| `spiffe_trust_bundle_map_file` | string | No | Unset | Path to a SPIFFE trust bundle map (JSON; see [Bundle Map Format](../06-security/02-tls.md#101-bundle-map-format)). |
+| `refresh_interval` | Duration | No | `"600s"` | How often to re-read the files. |
 
 Validation (failure makes the bootstrap invalid):
 

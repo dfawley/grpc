@@ -5,7 +5,7 @@
 
 # 5.1 Server Behavior
 
-<!-- Sources: doc/PROTOCOL-HTTP2.md, doc/statuscodes.md, doc/compression.md, doc/server_side_auth.md, doc/keepalive.md, A6, A9, A51 -->
+<!-- Sources: doc/PROTOCOL-HTTP2.md, doc/statuscodes.md, doc/compression.md, doc/server_side_auth.md, doc/keepalive.md, A6, A8, A9, A51 -->
 
 ## 1. Server Lifecycle
 
@@ -50,10 +50,12 @@ Before the server starts, the application configures it:
 
 ### 1.2 Binding and Start
 
-When the server binds a listening address, it creates a listener for it. A TCP
-address MAY use port `0`. The operating system then picks an unused
-(ephemeral) port. The server MUST report the port it actually bound to the
-application, because a client cannot connect otherwise. If an address resolves
+When the server binds a listening address, it creates a listener for it.
+Listening addresses MAY be TCP/UDP socket addresses or non-IP stream addresses
+supported by the platform (such as Unix domain sockets or VSOCK). A TCP/UDP
+address MAY use port `0`; the operating system then picks an unused
+(ephemeral) port, and the server MUST report the port it actually bound to the
+application so that clients can connect. If an address resolves
 to more than one local address, as `localhost` or a wildcard host can, the
 server binds all of them. When port `0` is used, the server SHOULD bind the same
 port number on all of them.
@@ -87,7 +89,7 @@ work:
 5. When a connection has no RPCs left, the server closes it. When every
    connection has closed, the server is **terminated**. Whether termination
    also waits for handlers to return is covered in
-   [Waiting for Handlers](#waiting-for-handlers).
+   [Waiting for Handlers](#15-waiting-for-handlers).
 
 Graceful shutdown MAY take an unbounded amount of time, for example when a
 long-lived streaming RPC never ends. An application that needs a bound combines
@@ -100,15 +102,17 @@ Forced shutdown terminates the server right away:
 1. The server closes all listeners (if graceful shutdown has not already done
    so).
 2. Every in-flight RPC is **cancelled**. Handlers observe the cancellation as
-   described in [Cancellation](#26-cancellation). The server SHOULD signal the
-   cancellation to clients (for example, with `RST_STREAM`), and then closes
-   every connection.
+   described in [Cancellation](#26-cancellation). The server MAY reset active
+   streams (for example, with `RST_STREAM(CANCEL)`) before closing every
+   connection, or close the connections directly.
 3. The server is terminated once all connections are closed.
+
+<!-- REVIEW(judgment) [SERVER-7]: This step was relaxed from "SHOULD signal the cancellation to clients (for example, with RST_STREAM), and then closes every connection" without an owner decision. Java's forced close (shutdownNow → ForcefulCloseCommand) sends GOAWAY and then RST_STREAM(CANCEL) on every active stream before closing, so Java clients see CANCELLED. C++ (Shutdown deadline → grpc_server_cancel_all_calls) sends a GOAWAY and closes the transport without per-stream RST_STREAM. Go's Server.Stop closes each net.Conn directly, with neither GOAWAY nor RST_STREAM. C++ and Go clients see UNAVAILABLE. Spec says: the server MAY reset active streams (for example, with RST_STREAM(CANCEL)) before closing every connection, or close the connections directly. -->
 
 Handlers MAY keep running after cancellation. Anything they send after
 cancellation is discarded.
 
-### Waiting for Handlers
+### 1.5 Waiting for Handlers
 
 Whether the server waits for running handlers to return before it reports
 termination, after either a graceful or a forced shutdown, is
@@ -128,9 +132,11 @@ dispatches the RPC. The full grammar is in [gRPC over HTTP/2](../03-wire-protoco
 
 | Condition | Server behavior |
 | --- | --- |
-| `content-type` does not begin with `application/grpc` | The server SHOULD respond with HTTP status `415 (Unsupported Media Type)` and MUST NOT dispatch the RPC. This keeps non-gRPC HTTP/2 clients from reading a gRPC error response (HTTP 200) as success. |
-| `content-type` begins with `application/grpc` but names a content-subtype the server has no codec for | The server MAY fail the RPC with `UNIMPLEMENTED` (a gRPC status in Trailers-Only, not HTTP 415) without dispatching it. Otherwise it dispatches the RPC using the method's default codec. See [Core RPC Semantics: Codecs and Content-Subtype](../02-rpc-semantics/README.md#17-codecs-and-content-subtype). |
-| `:method` is not `POST` | The request is not a valid gRPC request. The server MUST NOT dispatch it. |
+| `content-type` is missing or is not a gRPC `content-type` (`application/grpc` alone, or followed by `+<subtype>` or `;<parameters>`; see [gRPC over HTTP/2: `content-type`](../03-wire-protocol/01-http2.md#38-content-type)) | The server SHOULD respond with HTTP status `415 (Unsupported Media Type)` and MUST NOT dispatch the RPC. This keeps non-gRPC HTTP/2 clients (and `application/grpc-web` requests) from reading a gRPC error response (HTTP 200) as success. |
+| `content-type` is a gRPC `content-type` that names a content-subtype the server has no codec for | The server MAY fail the RPC with `UNIMPLEMENTED` (a gRPC status in Trailers-Only, not HTTP 415) without dispatching it. Otherwise it dispatches the RPC using the method's default codec. See [Core RPC Semantics: Codecs and Content-Subtype](../02-rpc-semantics/README.md#17-codecs-and-content-subtype). |
+| `:method` is not `POST` | The request is not a valid gRPC request. The server MUST NOT dispatch it, and MAY respond with an HTTP error status such as `405 (Method Not Allowed)` or `400 (Bad Request)`. |
+| Missing required pseudo-header (`:method`, `:scheme`, `:path`; [RFC 9113 §8.3.1](https://www.rfc-editor.org/rfc/rfc9113#section-8.3.1)) | The request is malformed ([RFC 9113 §8.1.1](https://www.rfc-editor.org/rfc/rfc9113#section-8.1.1)). The server MUST NOT dispatch it. |
+| More than one `:authority` header, or more than one `Host` header | The server MUST NOT dispatch the RPC. It rejects the request as described in [gRPC over HTTP/2: `:authority` and `Host`](../03-wire-protocol/01-http2.md#34-authority-and-host). |
 | Request headers larger than the server's header list size limit ([Limits](#24-limits)) | The server MUST NOT dispatch the RPC. It SHOULD fail the RPC with a gRPC status of `RESOURCE_EXHAUSTED` (for example, in a Trailers-Only response), so the client learns why the RPC failed. If it cannot send a status, it MAY instead reset the stream. |
 | `grpc-encoding` names a compression algorithm the server does not support | The server fails the RPC with `UNIMPLEMENTED`. Its response MAY include `grpc-accept-encoding` listing the algorithms the server accepts. If it does, that list MUST NOT contain the rejected algorithm. See [Compression](#34-compression). |
 | `grpc-timeout` present | The value sets the RPC deadline. See [Deadlines](#25-deadlines). |
@@ -159,10 +165,9 @@ lookup(path):
   (other than server interceptors, see [Server Interceptors](#4-server-interceptors)). It SHOULD
   use a Trailers-Only response.
 * A `:path` not of the form `/<service>/<method>` cannot match a registered
-  method. It goes to the unknown-method handler if there is one, and otherwise
-  fails with `UNIMPLEMENTED`.
-
-<!-- REVIEW(divergence) [SERVER-6]: Malformed :path handling differs, and the spec contradicts itself. Go fails any :path without a leading "/" or without a "/" between service and method with UNIMPLEMENTED (handleMalformedMethodName) and never calls the unknown-service handler. Java rejects a :path without a leading "/" with HTTP 404 plus UNIMPLEMENTED in the transport, but passes "/foo" to the fallback registry. C++ passes any unmatched :path to the generic service. Core RPC Semantics: Call ABNF says a malformed or unmatched full method name "fails with UNIMPLEMENTED", with no exception for an unknown-method handler. Spec says: a :path not of the form /<service>/<method> goes to the unknown-method handler if there is one. -->
+  method. If an unknown-method handler is registered, whether such a call
+  goes to it or fails with `UNIMPLEMENTED` is implementation-defined.
+  Otherwise it fails with `UNIMPLEMENTED`.
 
 The `:authority` header is not used for dispatch by default. It is made
 available to handlers (see [Call Context Available to Handlers](#27-call-context-available-to-handlers)), and
@@ -183,7 +188,7 @@ registration:
 
 | Limit | Default | Behavior when exceeded |
 | --- | --- | --- |
-| Maximum request header list size | implementation-defined; implementations SHOULD provide a safe default | The RPC is rejected ([Request Validation](#21-request-validation)). The server SHOULD advertise the limit with HTTP/2 `SETTINGS_MAX_HEADER_LIST_SIZE`. Size is computed as in RFC 9113 §6.5.2, with binary values counted after base64 encoding. |
+| Maximum request header list size | implementation-defined; implementations SHOULD provide a safe default | The RPC is rejected ([Request Validation](#21-request-validation)). The server SHOULD advertise the limit with HTTP/2 `SETTINGS_MAX_HEADER_LIST_SIZE`. Size is computed as in RFC 9113 §6.5.2, with binary values counted at their wire-encoded length (after base64 encoding, or raw length plus the leading NUL byte when [True Binary Metadata](../03-wire-protocol/02-true-binary-metadata.md) is used). |
 | Maximum receive (request) message size | 4 MiB (4194304 bytes) | The RPC fails with `RESOURCE_EXHAUSTED`. The handler observes cancellation. The limit applies to both the size as framed (the length prefix, checked before reading the message) and the size after decompression ([Core RPC Semantics: Message Size Limits](../02-rpc-semantics/README.md#12-message-size-limits)). |
 | Maximum send (response) message size | unlimited | The send fails and the RPC completes with `RESOURCE_EXHAUSTED`. |
 | Maximum concurrent streams per connection | unlimited | The server advertises the limit with `SETTINGS_MAX_CONCURRENT_STREAMS`. Streams above the limit are refused with `RST_STREAM(REFUSED_STREAM)`, and the client sees them as unprocessed (`UNAVAILABLE`, eligible for transparent retry). See [HTTP/2 Server Transport: Stream Limits](02-transports/02-http2.md#4-stream-limits). |
@@ -370,7 +375,7 @@ spec does not prescribe how they are implemented.
 
 ## 5. Connection Management
 
-> **Introduced by:** [gRFC A9: Server-side Connection Management](https://github.com/grpc/proposal/blob/master/A9-server-side-conn-mgt.md)
+> **Introduced by:** [gRFC A8: Client-side Keepalive](https://github.com/grpc/proposal/blob/master/A8-client-side-keepalive.md), [gRFC A9: Server-side Connection Management](https://github.com/grpc/proposal/blob/master/A9-server-side-conn-mgt.md)
 
 A server manages its connections independently of RPCs. The
 transport-independent model is in
@@ -429,8 +434,8 @@ The server API MUST provide a way to:
    * Configure instrumentation (for example, metrics and tracing plugins, see
      [Observability](../08-observability/README.md)).
 2. **Start** the server, getting an error if any listening address fails to
-   bind, and get the actual bound port of every listening address (needed when
-   port `0` is used).
+   bind, and get the actual bound port of every TCP/UDP listening address
+   (needed when port `0` is used).
 3. **Shut down gracefully** ([Graceful Shutdown](#13-graceful-shutdown)), **shut down
    forcibly** ([Forced Shutdown](#14-forced-shutdown)), and **wait for termination**. It
    MUST also be possible to start a graceful shutdown and later turn it into a

@@ -5,9 +5,11 @@
 
 # `xds_cluster_impl` LB Policy
 
-<!-- Sources: A27, A32, A37, A42, A64, A74, A78, A81, A85, A89, A105, grpc-proto grpc/service_config/service_config.proto -->
+<!-- Sources: A27, A29, A32, A37, A42, A64, A74, A78, A81, A85, A89, A105 -->
 
 > **Experimental:** This policy is registered as `xds_cluster_impl_experimental`.
+
+> **Introduced by:** [gRFC A37: xDS Aggregate and Logical DNS Clusters](https://github.com/grpc/proposal/blob/master/A37-xds-aggregate-and-logical-dns-clusters.md)
 
 ## 1. Overview
 
@@ -55,9 +57,6 @@ cluster's subtree, and its child is `xds_override_host`.
 
 ## 2. Configuration
 
-Proto: `XdsClusterImplLoadBalancingPolicyConfig` in
-`grpc/service_config/service_config.proto`.
-
 ```json
 {
   "xds_cluster_impl_experimental": {
@@ -72,9 +71,9 @@ Proto: `XdsClusterImplLoadBalancingPolicyConfig` in
 | `clusterName` | string | Yes | — | The leaf cluster name. It MUST NOT change over the life of the policy instance. |
 | `childPolicy` | LoadBalancingConfig list | Yes | — | Child policy (first supported entry). |
 
-All other fields of `XdsClusterImplLoadBalancingPolicyConfig` in the proto are
-deprecated and MUST be ignored.
-<!-- REVIEW(divergence) [XDS_LB-2]: Java: config is not parseable from JSON at all (provider rejects service-config use; built in-process), and the policy is registered as "cluster_impl_experimental"; Go: JSON field "cluster" (matches service_config.proto), registered "xds_cluster_impl_experimental"; C++: JSON field "clusterName" (matches A74), registered "xds_cluster_impl_experimental". spec says: "clusterName" (A74 / C++). -->
+Unknown fields (including deprecated fields from earlier versions) MUST be
+ignored.
+<!-- REVIEW(divergence) [XDS_LB-2]: Java: config is not parseable from JSON at all (provider rejects service-config use; built in-process), and the policy is registered as "cluster_impl_experimental"; Go: JSON field "cluster", registered "xds_cluster_impl_experimental"; C++: JSON field "clusterName" (matches A74), registered "xds_cluster_impl_experimental". spec says: "clusterName" (A74 / C++). -->
 
 ### 2.1 Other Inputs
 
@@ -82,11 +81,11 @@ deprecated and MUST be ignored.
 | --- | --- | --- | --- |
 | `XdsConfig` | Top-level attribute `XdsConfig` (see [XdsConfig](../05-client.md#3-xdsconfig)) | — | The cluster's data; the values read from it are listed below. |
 | Locality | Endpoint attribute locality, set by `cds`; read when the child creates a subchannel | empty locality | The locality stats object ([Load Reporting](#load-reporting)). |
-| Locality name string | Endpoint attribute locality name string, set by `cds`; read when the child creates a subchannel | empty | The value of the `grpc.lb.locality` picker label ([Picker Labels](#41-picker-labels)). |
+| Locality name string | Endpoint attribute locality name string, set by `cds`; read when the child creates a subchannel | empty | The value of the `grpc.lb.locality` picker label ([Picker Labels](#picker-labels)). |
 | `hostname` | Endpoint attribute `hostname`, set from the endpoint resource and passed through by `cds`; read when the child creates a subchannel | empty | The `:authority` override when the route has `auto_host_rewrite` set ([Authority Rewriting](#authority-rewriting)). |
 | XdsClient | Top-level attribute XdsClient | — | Its LRS client provides the drop stats and locality stats objects ([Load Reporting](#load-reporting)); it provides the certificate provider instances configured in the bootstrap ([Transport Security](#transport-security)). |
 | Channel credentials | Channel: whether the channel was created with XdsCredentials | — | Whether to build and pass the TLS configuration ([Transport Security](#transport-security)). |
-| Route | Call attribute route, set by the xDS ConfigSelector (see [Call attributes](../05-client.md#53-call-attributes)) | — | Its `auto_host_rewrite` field is read by the picker for authority rewriting ([Authority Rewriting](#authority-rewriting)). |
+| Auto-host-rewrite | Call attribute auto-host-rewrite, set by the xDS ConfigSelector (see [Call attributes](../05-client.md#53-call-attributes)) | `false` | Read by the picker to decide whether to override `:authority` with the endpoint's `hostname` ([Authority Rewriting](#authority-rewriting)). |
 
 Values read from the `XdsConfig` entry for `clusterName`:
 
@@ -233,9 +232,9 @@ If load reporting is disabled, the wrapper still stores the locality name.
 > **Introduced by:** [gRFC A81: xDS Authority Rewriting](https://github.com/grpc/proposal/blob/master/A81-xds-authority-rewriting.md)
 
 When the child creates a subchannel, the wrapper also stores the endpoint's
-`hostname` attribute. On a completed pick, if the route call attribute (see
-[Call attributes](../05-client.md)) has `auto_host_rewrite` set and the stored hostname is
-not empty, the picker MUST set the RPC's `:authority` override to the
+`hostname` attribute. On a completed pick, if the auto-host-rewrite call
+attribute (see [Call attributes](../05-client.md#53-call-attributes)) is true
+and the stored hostname is not empty, the picker MUST set the RPC's `:authority` override to the
 hostname. This override takes precedence over the channel's default authority
 and over per-endpoint authority attributes, but not over an authority the
 application set explicitly for the RPC (see
@@ -328,12 +327,12 @@ def Pick(pick_args):
     record a call start on wrapper.locality_stats and attach the call tracker
       (Load Reporting)
   set the grpc.lb.locality label (Picker Labels)
-  if route attribute auto_host_rewrite is set and wrapper.hostname is not empty:
+  if auto-host-rewrite call attribute is true and wrapper.hostname is not empty:
     set the :authority override to wrapper.hostname (Authority Rewriting)
   return result
 ```
 
-### 4.1 Picker Labels
+#### Picker Labels
 
 > **Introduced by:** [gRFC A78: gRPC OTel Metrics for WRR, Pick First, and XdsClient](https://github.com/grpc/proposal/blob/master/A78-grpc-metrics-wrr-pf-xds.md)
 
@@ -348,7 +347,7 @@ def Pick(pick_args):
 
 The policy has a single child, created from `childPolicy` on the first update.
 The child receives the update's endpoints, resolution note, and attributes,
-plus the cluster name attribute ([Update](#33-updates-from-the-parent)). `ExitIdle()`,
+plus the cluster name attribute ([Updates from the Parent](#33-updates-from-the-parent)). `ExitIdle()`,
 `ResetBackoff()`, and `Shutdown()` are forwarded to it
 ([ExitIdle](#34-exitidle), [ResetBackoff](#35-resetbackoff),
 [Shutdown](#36-shutdown)).
@@ -383,7 +382,7 @@ cluster's value changes ([Connection Scaling](#connection-scaling)).
 ## 6. Metrics
 
 The policy records no metrics. Its picker sets the `grpc.lb.locality` label
-([Picker Labels](#41-picker-labels)).
+([Picker Labels](#picker-labels)).
 
 ## 7. API Requirements
 

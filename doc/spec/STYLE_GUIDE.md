@@ -61,8 +61,41 @@ when adding to or changing the specification.
   or MAY; gRPC-specific values, limits, and error-code mappings; and behavior
   the standard leaves open. A short phrase or value from the standard may be
   repeated where it is needed to make a gRPC requirement precise.
-- **Proto references** name the file by repository path, e.g.
-  `grpc/service_config/service_config.proto`.
+- **JSON is documented as JSON.** Every JSON configuration or data format
+  (service config, LB policy configs, the xDS bootstrap, authorization
+  policies, the binary logging config, and so on) is specified in JSON terms:
+  JSON field names, JSON types, defaults, validation rules, and examples. Never
+  define or explain a JSON format by referencing a `.proto` file or message
+  (no "see `service_config.proto`", no "the JSON form of message `X`", no
+  appeal to the protobuf JSON mapping), and do not keep such a reference just
+  because the proto was a historical source; the JSON description stands
+  alone. Do not add meta-commentary stating that the schema is defined in this
+  specification. Messages that are protobuf on the wire (for example the
+  health, reflection, ORCA, channelz, and CSDS services, binary log records,
+  and xDS resources) are specified as protobuf and may reference their protos.
+  Present each JSON schema with a concrete example in a `json` code block
+  showing the fields, followed by a table enumerating the fields:
+
+  | Field | Type | Required | Default | Description |
+  | --- | --- | --- | --- | --- |
+
+  Field names are in backticks; nested fields use dotted paths (`a.b`), list
+  elements use `[]` (`a[].b`), and map values use `{}` (`a{}.b`).
+- **Proto and repository links.** Wire protocols, standard services, and record
+  formats defined in `grpc-proto` link to the file on GitHub at
+  `https://github.com/grpc/grpc-proto/blob/master/<path>` (for example,
+  ``[`grpc/health/v1/health.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto)``).
+  Non-gRPC `.proto` files (such as Envoy, `cncf/xds`, or `googleapis`) are
+  named by repository path.
+- **No references to `grpc/grpc` files outside `doc/`.** Specification text,
+  including `<!-- Sources: … -->` comments, never references files in the
+  `grpc/grpc` repository other than those under `doc/` (such as
+  `doc/load-balancing.md`): no `src/`, `include/`, `test/`, or `.proto` files
+  from that repository. References to other repositories (gRFCs in
+  `grpc/proposal`, wire-format protos in `grpc-proto`, Envoy, and so on) are
+  allowed. The only exceptions are inline `<!-- REVIEW(…) -->` comments and the
+  review and bug tracking files (`review_items.md`, `resolved_items.md`,
+  `bugs_*.md`), which cite implementation code by design.
 - **Review comments.** Open questions about the spec are marked inline with
   `<!-- REVIEW(<category>) [<NAME>]: <details> -->`, where `<NAME>` identifies
   the item in the review tracker. Do not put review comments inside code blocks.
@@ -70,11 +103,12 @@ when adding to or changing the specification.
 ## 3. Numbering and Cross-References
 
 - Each document's H1 carries its section number, e.g.
-  `# 4.6 Subchannels and Connections`. LB policy documents are unnumbered, e.g.
+  `# 4.7 Subchannels and Connections`. LB policy documents are unnumbered, e.g.
   ``# `pick_first` LB Policy``.
-- Within a document, subsections omit the parent number: H2 is `## N. Title`,
-  H3 is `### N.M Title`, and H4 and deeper are unnumbered. Avoid nesting deeper
-  than H3.
+- Within a document, subsections omit the parent number: H2 is `## N. Title`
+  and H3 is `### N.M Title`. H4 (`#### Title`) and H5 (`##### Title`) are
+  allowed where further subdivision helps clarity, and MUST NOT be numbered. Do
+  not use H6 (`######`).
 - Appendix sections use `## A.1 …`; glossary headings are `## A`, `## B`, and
   so on.
 - Never refer to sections by number across documents. Cross-references are
@@ -105,11 +139,12 @@ when adding to or changing the specification.
 ## 4. LB Policy Documents
 
 Every LB policy document (`04-client-channel/lb-policies/*.md` and
-`09-xds/lb-policies/*.md`) uses exactly this structure. Every section is always
-present, so section numbers and anchors are the same in every LB policy
-document (for example, `#4-picker-implementation` is always the picker). A
-section that does not apply contains a single sentence saying so, e.g.
-"Not applicable: the policy has no child policies."
+`09-xds/lb-policies/*.md`) uses the numbered H2/H3 structure below (unnumbered
+`####` and `#####` subsections may be used within sections where needed). Every
+numbered section is always present, so section numbers and anchors are the same
+in every LB policy document (for example, `#4-picker-implementation` is always
+the picker). A section that does not apply contains a single sentence saying
+so, e.g. "Not applicable: the policy has no child policies."
 
 ```
 <banner>
@@ -161,16 +196,13 @@ section that does not apply contains a single sentence saying so, e.g.
 
 Configuration always appears as section 2, in this fixed layout:
 
-1. A line naming the proto message, e.g.
-   ``Proto: `RoundRobinConfig` in `grpc/service_config/service_config.proto`.``
-   If the config has no proto message, say so.
-2. A JSON example of the policy's complete `LoadBalancingConfig` entry (the
+1. A JSON example of the policy's complete `LoadBalancingConfig` entry (the
    object keyed by the registered name) in a `json` code block, showing every
    field. Where the config contains a child policy (a `LoadBalancingConfig
    list` field), the example uses the placeholder `{ "child_policy_name": {} }`
    rather than a real policy, unless the field always holds one specific
    policy.
-3. A field table with exactly these columns:
+2. A field table with exactly these columns:
 
    | Field | Type | Required | Default | Description |
    | --- | --- | --- | --- | --- |
@@ -186,7 +218,7 @@ Configuration always appears as section 2, in this fixed layout:
    - **Required** is `Yes` or `No`. **Default** is the default value, or `—`.
    - If the config has no fields, the table is replaced by "The config has no
      fields; any fields are ignored."
-4. `### 2.1 Other Inputs` lists everything else the policy reads besides its
+3. `### 2.1 Other Inputs` lists everything else the policy reads besides its
    JSON config, as a table with exactly these columns (or the single word
    "None." if there are no other inputs):
 
@@ -214,7 +246,7 @@ Configuration always appears as section 2, in this fixed layout:
      the `XdsConfig` entry for `clusterName`:". Each bullet names the value's
      path within the input, its default if any, what the policy uses it for,
      and a link to the section that specifies that use.
-5. `### 2.2 Validation` first lists every condition that makes the JSON config
+4. `### 2.2 Validation` first lists every condition that makes the JSON config
    invalid (no subsection for this). It then covers the other inputs, in a
    paragraph "Other inputs (Other Inputs) are validated as follows:" (with
    "Other Inputs" linked to `### 2.1 Other Inputs`) followed by one bullet per input that has a limit, clamping, or
@@ -368,7 +400,7 @@ doc/spec/
       01-transport-model.md, 02-http2.md, 03-http3.md, 04-in-process.md
   06-security/                            6. Security (README: contents)
     01-security-model.md, 02-tls.md, 03-call-credentials.md,
-    04-authorization.md
+    04-authorization.md, 05-alts.md
   07-services/                            7. Standard Services (README: contents)
     01-health.md, 02-reflection.md, 03-orca.md, 04-admin.md
   08-observability/                       8. Observability (README: contents)
@@ -384,6 +416,10 @@ doc/spec/
     lb-policies/                          xDS LB policies
       xds_cluster_manager.md, cds.md, xds_cluster_impl.md,
       xds_override_host.md, xds_wrr_locality.md
+  10-vendor-specific/                     10. Vendor-Specific Features (README: contents)
+    01-google-default-credentials.md, 02-google-c2p-resolver.md,
+    03-gcp-service-account-identity-credentials.md,
+    04-gcp-authentication-filter.md, 05-google-call-credentials.md
   appendices/                             Appendices A–G
 ```
 

@@ -23,7 +23,7 @@ Creating a channel takes these inputs:
 - **Channel credentials**: they set the transport security for every
   connection the channel makes, for example TLS credentials or insecure
   (plaintext) credentials. See [Security](../06-security/README.md).
-- **Options**: optional settings that control the channel's behavior. Each
+- **Options**: settings that control the channel's behavior. Each
   option is listed under [API Requirements](#10-api-requirements) or in the
   section that defines the behavior it controls.
 
@@ -337,8 +337,8 @@ connections to all endpoints, such as `round_robin`, reconnect right away
   MUST also be provided wherever the language's idioms call for them.
 - The channel API MUST provide a way to reset the connection backoff of
   all subchannels, so the next connection attempt can start right away (see
-  [Subchannels and Connections](07-subchannels.md)). It also resets the resolver's
-  re-resolution backoff ([Name Resolution](03-name-resolution.md)).
+  [Subchannels and Connections](07-subchannels.md)). It SHOULD also reset the
+  resolver's re-resolution backoff ([Name Resolution](03-name-resolution.md)).
 
 **Shutdown**
 

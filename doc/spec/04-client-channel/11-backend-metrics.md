@@ -14,7 +14,7 @@ so on) to clients, encoded as ORCA `xds.data.orca.v3.OrcaLoadReport`
 messages. Clients use them to make load-balancing decisions, for example in
 [`weighted_round_robin`](lb-policies/weighted_round_robin.md), and to
 propagate them to a load-reporting server (see
-[Load Reporting](../09-xds/10-load-reporting.md)).
+[Load Reporting (LRS)](../09-xds/10-load-reporting.md)).
 
 There are two ways to receive reports:
 
@@ -30,12 +30,14 @@ specified in [Backend Metrics (ORCA)](../07-services/03-orca.md).
 
 ## 1. Report Representation
 
-- A received report is deserialized from its binary protobuf encoding into
-  an `OrcaLoadReport` and exposed to LB policies as a read-only value. The
-  same type is used for per-call and OOB reports.
+- A received report is deserialized from its binary `OrcaLoadReport`
+  encoding and exposed to LB policies as a read-only backend metric report
+  containing the fields defined in
+  [Backend Metrics (ORCA): Data Model](../07-services/03-orca.md#1-data-model).
+  The same representation is used for per-call and OOB reports.
 - A report MUST be deserialized at most once, however many LB policies
   consume it.
-- If a per-call report cannot be parsed as an `OrcaLoadReport`, the client
+- If a per-call report cannot be deserialized as an `OrcaLoadReport`, the client
   treats it as absent and MAY log the error. A malformed report never
   affects the call's status, or any other call on the connection. (Invalid
   base64 in the trailer is handled by the transport's general binary-header
@@ -51,11 +53,13 @@ specified in [Backend Metrics (ORCA)](../07-services/03-orca.md).
 
 - The server sends a per-call report as the value of the
   `endpoint-load-metrics-bin` trailing-metadata entry (see
-  [Backend Metrics (ORCA): Per-Request Reporting](../07-services/03-orca.md)). It can appear in normal trailers and in
-  a Trailers-Only response.
+  [Backend Metrics (ORCA): Per-Request Reporting](../07-services/03-orca.md#2-per-request-reporting)). It can appear in normal trailers and in
+  a Trailers-Only response. If the trailing metadata has more than one
+  `endpoint-load-metrics-bin` value, whether the client uses the last one
+  or treats the report as absent is implementation-defined.
 - An LB policy receives per-call reports through the call tracker it
   attaches to a pick result
-  ([Load Balancing](06-load-balancing.md#64-call-completion-tracking)).
+  ([Load Balancing: Call-Completion Tracking](06-load-balancing.md#64-call-completion-tracking)).
   When the call ends, the tracker is given the parsed report, if one was
   present, along with the call's status and trailing metadata.
 - Only calls whose pick attached a tracker that asks for backend metrics
@@ -99,12 +103,12 @@ This section specifies only what is specific to OOB backend metrics.
   loss, removal of the last watcher, or subchannel shutdown.
 - **Server interval.** The server may send reports less often than
   requested. It enforces its own minimum interval (see
-  [Server Behavior](../07-services/03-orca.md)). Clients MUST NOT assume reports arrive
+  [Backend Metrics (ORCA): Server Behavior](../07-services/03-orca.md#42-server-behavior)). Clients MUST NOT assume reports arrive
   at exactly the requested interval.
 
 ### 3.3 Delivery
 
-- Each `OrcaLoadReport` received on the stream is delivered, unchanged, to
+- Each report received on the stream is delivered, unchanged, to
   every OOB watcher registered on the subchannel at that time. The client
   does not aggregate, filter, or rate-limit reports. Each policy does its
   own aggregation and decides how long a report remains valid (for
@@ -120,7 +124,7 @@ This section specifies only what is specific to OOB backend metrics.
   propagated to load reporting (LRS); only per-call reports are (see
   [Load Reporting (LRS)](../09-xds/10-load-reporting.md)).
 
-## 4. Consumers in This Specification
+## 4. Built-in Consumers
 
 | Consumer | Mode | Use |
 | --- | --- | --- |
@@ -141,6 +145,6 @@ Custom LB policies can use either mode through the same APIs.
   same effect.
 - Both capabilities MUST be available to custom LB policies registered by
   applications.
-- These APIs MUST deliver reports in the same `OrcaLoadReport`
-  representation for both modes.
+- These APIs MUST deliver reports in the same read-only representation for
+  both modes.
 

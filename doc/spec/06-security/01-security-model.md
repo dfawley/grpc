@@ -5,7 +5,7 @@
 
 # 6.1 Security Model
 
-<!-- Sources: doc/server_side_auth.md, doc/ssl-performance.md (informative), doc/security_audit.md (skimmed), L62, A29 (programming API), A54, A81, A83, A87, A120, include/grpc/grpc_security_constants.h -->
+<!-- Sources: doc/server_side_auth.md, doc/ssl-performance.md (informative), doc/security_audit.md (skimmed), L62, A29 (programming API), A54, A81, A83, A87, A120 -->
 
 ## 1. Security Model
 
@@ -62,6 +62,7 @@ gRPC defines the following transport credential types:
 |------|--------|--------|----------------|-------------|
 | Insecure | Yes | Yes | `NONE` | Plaintext. No handshake, no peer authentication. |
 | TLS | Yes | Yes | `PRIVACY_AND_INTEGRITY` | TLS 1.2+ with optional mutual authentication. See [TLS](02-tls.md). |
+| ALTS | Yes | Yes | `PRIVACY_AND_INTEGRITY` | Application Layer Transport Security: mutual authentication of workload identities through a handshaker service. See [ALTS](05-alts.md). |
 | xDS | Yes | Yes | Depends on configuration | Uses security configuration from the xDS control plane, or the *fallback credentials* if the control plane supplies none. See [xDS Security](../09-xds/09-security.md). |
 | Composite | Yes | No | Same as the wrapped channel credentials | Channel credentials combined with call credentials ([Composite Credentials](#4-composite-credentials)). |
 
@@ -82,14 +83,24 @@ Rules:
   used because of an error. An error in xDS-provided security configuration
   fails the connection.
 
+Channel credentials tied to one vendor's infrastructure, such as Google
+default credentials, are specified in
+[Vendor-Specific Features](../10-vendor-specific/README.md), as are
+vendor-specific call credentials (see
+[Google Call Credentials](../10-vendor-specific/05-google-call-credentials.md)). Other
+environment-specific channel credentials (such as host-local IPC credentials)
+are outside the scope of this specification; implementations MAY provide them
+through the same channel and server credential interfaces.
+
 ## 3. Call Credentials
 
 *Call credentials* compute metadata to attach to an RPC. They can be attached
 in two ways:
 
 1. **Per channel**, by combining channel credentials and call credentials into
-   composite channel credentials ([Composite Credentials](#4-composite-credentials)). The call credentials then apply
-   to every RPC on the channel.
+   composite channel credentials ([Composite Credentials](#4-composite-credentials)), or by supplying call
+   credentials as a channel creation option alongside channel credentials. The
+   call credentials then apply to every RPC on the channel.
 2. **Per call**, through a call option. The call credentials then apply only to
    that RPC.
 
@@ -142,7 +153,9 @@ is a property of the call credential type. Each type defines it. It is not a
 per-RPC choice.
 
 - All built-in call credentials that carry bearer tokens (access token, GCP
-  service account identity, JWT token file) require `PRIVACY_AND_INTEGRITY`.
+  service account identity, JWT token file, and the
+  [Google Call Credentials](../10-vendor-specific/05-google-call-credentials.md))
+  require `PRIVACY_AND_INTEGRITY`.
 - Application-defined call credentials MUST be able to declare their minimum
   level. If they do not, the default is `PRIVACY_AND_INTEGRITY`.
 - A composite call credential's minimum level is the highest level among its
@@ -194,7 +207,7 @@ the information.
 
 | Property name | Set by | Value |
 |---------------|--------|-------|
-| `transport_security_type` | All credentials | The kind of transport security: `insecure`, `ssl` or `tls`. `ssl` and `tls` both mean a TLS connection. |
+| `transport_security_type` | All credentials | The kind of transport security: `insecure`, `ssl`, `tls`, or `alts`. `ssl` and `tls` both mean a TLS connection; `alts` means an ALTS connection ([ALTS](05-alts.md)). |
 | `security_level` | All credentials | The connection's security level ([Security Levels](#5-security-levels)). |
 | `x509_common_name` | TLS | Subject CN of the peer leaf certificate. |
 | `x509_subject` | TLS | Full subject distinguished name of the peer leaf certificate, in RFC 2253 format. |
@@ -207,9 +220,11 @@ the information.
 | `x509_pem_cert` | TLS | The peer leaf certificate, PEM-encoded. |
 | `x509_pem_cert_chain` | TLS | The peer certificate chain, PEM-encoded. |
 | `ssl_session_reused` | TLS | `true` if the TLS session was resumed, otherwise `false`. |
-| `ssl_negotiated_key_exchange_group` | TLS | Name of the key exchange group negotiated in the handshake, for example `X25519MLKEM768`. See [TLS](02-tls.md). |
+| `ssl_negotiated_key_exchange_group` | TLS | Name of the key exchange group negotiated in the handshake, when exposed by the TLS library, for example `X25519MLKEM768`. See [TLS](02-tls.md). |
 | `ssl_tls_version` | TLS | Negotiated TLS protocol version. |
 | `ssl_requested_server_name` | TLS (server side) | The SNI the client sent, if any. |
+| `service_account` | ALTS | The peer's service account. See [ALTS](05-alts.md). |
+| `alts_context` | ALTS | The serialized ALTS context of the connection. See [ALTS](05-alts.md). |
 
 The representation of the `security_level` value is implementation-defined.
 An implementation MAY expose it as a typed value instead of a string
@@ -224,6 +239,9 @@ Peer identity for TLS:
   name is `x509_common_name`.
 - If the peer sent no certificate (for example, a TLS server that did not
   request a client certificate), there is no peer identity.
+
+For ALTS, the peer identity property name is `service_account` (see
+[ALTS: AuthContext](05-alts.md#7-authcontext)).
 
 Example: an mTLS connection seen by the server.
 
@@ -244,6 +262,8 @@ ssl_negotiated_key_exchange_group = "X25519MLKEM768"
 
 peer_identity_property_name    = "x509_subject_alternative_name"
 ```
+
+<!-- REVIEW(divergence) [SECURITY-20]: The `AuthContext` API shape, property names, and client-side availability timing diverge across implementations. C++ exposes a string-keyed multi-map (`grpc::AuthContext`) with `peer_identity_property_name` and the `transport_security_type` / `x509_*` / `ssl_*` property names above, populated on the client once response headers or trailers arrive. Java exposes `Grpc.TRANSPORT_ATTR_SSL_SESSION` (`javax.net.ssl.SSLSession`) on channel and server transport attributes rather than a string multi-map, and exposes no `AuthContext` type. Go exposes `peer.FromContext` (`peer.AuthInfo`, e.g. `credentials.TLSInfo`) on the server context and via `grpc.Peer(&p)` on the client, where `Peer` is populated only when the RPC completes rather than when response headers arrive. Decide whether to treat the string-keyed multi-map and standard property names as conceptual (`MAY`) in §6.1–§6.2 and §8 while requiring access to peer certificates and TLS session info, and whether to relax client-side availability to "once peer connection information is exposed by the call API (at latest upon call completion)". -->
 
 ## 7. Authority and Authority Override
 
@@ -266,8 +286,12 @@ Override mechanisms:
 | Mechanism | Scope | Affects TLS name check? |
 |-----------|-------|-------------------------|
 | Channel default-authority option | All RPCs and all connections on the channel | Yes. The overridden authority becomes the expected server name and the default SNI. |
-| Per-call authority override | One RPC | No change to the connection. The RPC's authority is checked against the server certificate per RPC (see below). |
-| xDS authority rewriting | One RPC | Same as the per-call override. |
+| Per-call authority override | One RPC | No change to the connection. The RPC's authority is checked against the server certificate per RPC (unless credentials do no hostname verification; see below). |
+| xDS authority rewriting | One RPC | Same as the per-call override (when xDS credentials use control-plane SAN matching, no per-RPC hostname check is performed; see below). |
+
+### 7.1 Per-RPC Authority Verification
+
+> **Introduced by:** [gRFC A81: xDS Authority Rewriting](https://github.com/grpc/proposal/blob/master/A81-xds-authority-rewriting.md)
 
 When an RPC's authority differs from the name its connection was verified
 against, the channel credentials decide whether the RPC may use that
@@ -281,13 +305,14 @@ authority rewriting.
 ## 8. API Requirements
 
 - The channel API MUST provide a way to create a channel with given channel
-  credentials. Insecure, TLS, xDS, and composite channel credentials MUST be
-  available.
+  credentials. Insecure, TLS, and xDS channel credentials MUST be available.
 - The server API MUST provide a way to bind each listening port to server
   credentials. Insecure, TLS, and xDS server credentials MUST be available.
-- The credentials API MUST provide a way to create composite channel
-  credentials from channel credentials and call credentials, and composite
-  call credentials from two or more call credentials.
+- The credentials or channel API MUST provide a way to associate call
+  credentials with a channel (for example, composite channel credentials
+  combining channel credentials and call credentials, or an equivalent channel
+  option), and a way to create composite call credentials from two or more call
+  credentials.
 - The call API MUST provide a way to attach call credentials to one RPC.
 - The call credentials API MUST let application-defined call credentials
   declare their minimum security level.

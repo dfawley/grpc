@@ -5,7 +5,15 @@
 
 # 9.6 xDS LB Policies
 
-<!-- Sources: A27, A31, A37, A42, A48, A52, A58, A62, A68, A74, A75, A114, grpc-proto grpc/service_config/service_config.proto -->
+<!-- Sources: A27, A31, A32, A37, A42, A48, A50, A52, A55, A56, A58, A61, A62, A68, A74, A75, A81, A89, A105, A114 -->
+
+> **Experimental:** All policies in this section are registered under names
+> with the `_experimental` suffix (`xds_cluster_manager_experimental`,
+> `cds_experimental`, `xds_cluster_impl_experimental`,
+> `xds_override_host_experimental`, `xds_wrr_locality_experimental`). The same
+> is true of `priority_experimental`, `weighted_target_experimental`,
+> `outlier_detection_experimental`, `ring_hash_experimental`,
+> `least_request_experimental`, and `random_subsetting_experimental`.
 
 This section specifies the LB policies that implement xDS clusters on the
 client, and the **xDS LB policy registry**, which converts a Cluster
@@ -27,14 +35,6 @@ The generic LB policy, helper, picker, and subchannel APIs are in
 Every policy in this section gets its cluster data from the `XdsConfig`
 resolver attribute (see [XdsConfig](05-client.md)) and not from its JSON
 config. The JSON configs contain only what is needed to find that data.
-
-> **Experimental:** All policies in this section are registered under names
-> with the `_experimental` suffix (`xds_cluster_manager_experimental`,
-> `cds_experimental`, `xds_cluster_impl_experimental`,
-> `xds_override_host_experimental`, `xds_wrr_locality_experimental`). The same
-> is true of `priority_experimental`, `weighted_target_experimental`,
-> `outlier_detection_experimental`, `ring_hash_experimental`,
-> `least_request_experimental`, and `random_subsetting_experimental`.
 
 ## 1. LB Policy Tree
 
@@ -162,6 +162,10 @@ The XdsClient converts each Cluster resource's LB configuration to a gRPC
 
 ### 2.1 `load_balancing_policy`
 
+> **Experimental:** `ring_hash_experimental`, `least_request_experimental`,
+> `random_subsetting_experimental`, and `xds_wrr_locality_experimental` are
+> experimental policy names.
+
 If `Cluster.load_balancing_policy` is set, it is used, and `lb_policy` and
 `lb_config` are ignored. Conversion is recursive:
 
@@ -234,10 +238,6 @@ Applications can register custom LB policies in the gRPC LB policy registry
 and select them via `TypedStruct`. Custom policy names SHOULD follow protobuf
 message naming conventions in the application's own package (for example
 `myorg.MyCustomLb`).
-
-> **Experimental:** `ring_hash_experimental`, `least_request_experimental`,
-> `random_subsetting_experimental`, and `xds_wrr_locality_experimental` are
-> experimental policy names.
 
 ### 2.2 Legacy `lb_policy`
 

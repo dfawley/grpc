@@ -5,7 +5,7 @@
 
 # 4.12 Retries and Hedging
 
-<!-- Sources: A6, A54, grpc-proto grpc/service_config/service_config.proto, doc/service_config.md -->
+<!-- Sources: A6, A54, doc/service_config.md -->
 
 > **Introduced by:** [gRFC A6: gRPC Retry Design](https://github.com/grpc/proposal/blob/master/A6-client-retries.md)
 
@@ -14,8 +14,9 @@ It does this in three ways:
 
 - **Transparent retries.** gRPC retries automatically, whatever the service
   config says, when it knows the server application never saw the attempt
-  ([Transparent Retries](#8-transparent-retries)). Only disabling retries on the channel
-  turns them off ([Limits and Disabling Retries](#10-limits-and-disabling-retries)).
+  ([Transparent Retries](#8-transparent-retries)). They SHOULD still happen
+  even when configured retries are disabled on the channel
+  ([Limits and Disabling Retries](#10-limits-and-disabling-retries)).
 - **Retry policy.** Configured per method in the service config. Failed
   attempts are re-sent with exponential backoff when the status is one of the
   listed retryable codes ([Retry Policy](#2-retry-policy)).
@@ -47,12 +48,14 @@ service config when the RPC starts and do not change for the life of the RPC.
 ## 2. Retry Policy
 
 ```json
-"retryPolicy": {
-  "maxAttempts": 4,
-  "initialBackoff": "0.1s",
-  "maxBackoff": "1s",
-  "backoffMultiplier": 2,
-  "retryableStatusCodes": [ "UNAVAILABLE" ]
+{
+  "retryPolicy": {
+    "maxAttempts": 4,
+    "initialBackoff": "0.1s",
+    "maxBackoff": "1s",
+    "backoffMultiplier": 2,
+    "retryableStatusCodes": [ "UNAVAILABLE" ]
+  }
 }
 ```
 
@@ -61,13 +64,13 @@ service config when the RPC starts and do not change for the life of the RPC.
 If any rule in this table is broken, the whole service config is invalid (see
 [Service Config](04-service-config.md)).
 
-| JSON field | Type | Required | Validation and meaning |
-| --- | --- | --- | --- |
-| `maxAttempts` | integer | yes | MUST be a JSON integer greater than 1. It is the maximum number of attempts, including the original. Values above the client's limit (5 by default; see [Limits and Disabling Retries](#10-limits-and-disabling-retries)) are treated as that limit and are not a validation error. |
-| `initialBackoff` | Duration | yes | MUST be a valid Duration string greater than 0. |
-| `maxBackoff` | Duration | yes | MUST be a valid Duration string greater than 0. |
-| `backoffMultiplier` | number | yes | MUST be a JSON number greater than 0. |
-| `retryableStatusCodes` | array of status codes | yes | MUST be a non-empty JSON array. Each element MUST be a valid gRPC status code, given as an integer or as the exact upper-case name (for example `14` or `"UNAVAILABLE"`). |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `maxAttempts` | uint32 | Yes | — | MUST be a JSON integer greater than 1. Maximum number of attempts, including the original. Values above the client's limit (5 by default; see [Limits and Disabling Retries](#10-limits-and-disabling-retries)) are treated as that limit and are not a validation error. |
+| `initialBackoff` | Duration | Yes | — | MUST be a valid Duration string greater than 0. |
+| `maxBackoff` | Duration | Yes | — | MUST be a valid Duration string greater than 0. |
+| `backoffMultiplier` | number | Yes | — | MUST be a JSON number greater than 0. |
+| `retryableStatusCodes` | list of status code | Yes | — | MUST be a non-empty JSON array. Each element MUST be a valid gRPC status code, given as an integer or as the exact upper-case name (for example `14` or `"UNAVAILABLE"`). |
 
 Choosing retryable codes is up to the service owner. In general, only codes
 that mean the server did not process the request are safe to retry. A wider
@@ -97,28 +100,31 @@ in order, and the first one that applies decides:
 
 ```
 OnAttemptFinished(rpc, attempt, status, pushback):
-  if (TransparentRetryApplies(attempt)):            // 4.10.8
+  if (attempt.was_dropped):                         return Commit(rpc, status)  // LB Drop
+  if (TransparentRetryApplies(attempt)):            // Transparent Retries (section 8)
     return StartAttemptNow(rpc, transparent = true)
   if (status == OK):
     throttle.RecordSuccess()                        // any RPC, policy or not
     return Commit(rpc, status)
-  if (rpc.retry_policy == null):                    return Commit(rpc, status)
-  if (pushback present and (negative or unparseable)):   // 4.10.5
-    throttle.RecordFailure()
+  if (pushback present and (negative or unparseable)):   // Server Pushback (section 5)
+    throttle.RecordFailure()                        // any RPC, policy or not
     return Commit(rpc, status)
+  if (rpc.retry_policy == null):                    return Commit(rpc, status)
   if (status.code not in retryableStatusCodes):     return Commit(rpc, status)
   if (!throttle.RecordFailureAndCheck()):           return Commit(rpc, status)  // throttled
   if (rpc.committed):                               return Finish(rpc, status)
   rpc.attempts_completed++
   if (rpc.attempts_completed >= effective_max_attempts):
                                                     return Commit(rpc, status)
-  delay = pushback present ? pushback : Backoff(n)  // 4.10.2.2
+  delay = pushback present ? pushback : Backoff(n)  // Backoff (section 2.2)
   if (pushback present): reset n so the next backoff uses n = 1
   ScheduleAttempt(rpc, after = delay)               // still bounded by the deadline
 ```
 
 - The RPC fails with the status of its last attempt.
-<!-- REVIEW(judgment) [RETRY-1]: Throttle successes are now counted for every RPC on the channel, policy or not. The failure side is still unclear for RPCs without a retry policy: the pseudocode commits before the "don't retry" pushback check, so such a pushback is not recorded, while Token Accounting's failure rule reads as applying to any response with that pushback. Go records it for RPCs without a policy; C++ does not. Spec currently says: not recorded for RPCs without a policy (pseudocode). -->
+- Throttling failures are recorded before the `rpc.committed` check, so an
+  attempt that fails in a way that counts ([Token Accounting](#42-token-accounting))
+  records a failure even when the RPC is already committed to it.
 - If `retryThrottling` is not configured, the `throttle` operations do
   nothing, and `RecordFailureAndCheck()` always allows the retry.
 - If response headers are received on an attempt, the RPC is committed to
@@ -140,10 +146,12 @@ OnAttemptFinished(rpc, attempt, status, pushback):
 ## 3. Hedging Policy
 
 ```json
-"hedgingPolicy": {
-  "maxAttempts": 4,
-  "hedgingDelay": "0.5s",
-  "nonFatalStatusCodes": [ "UNAVAILABLE", "INTERNAL", "ABORTED" ]
+{
+  "hedgingPolicy": {
+    "maxAttempts": 4,
+    "hedgingDelay": "0.5s",
+    "nonFatalStatusCodes": [ "UNAVAILABLE", "INTERNAL", "ABORTED" ]
+  }
 }
 ```
 
@@ -153,11 +161,11 @@ safe to run more than once.
 
 ### 3.1 Fields and Validation
 
-| JSON field | Type | Required | Validation and meaning |
-| --- | --- | --- | --- |
-| `maxAttempts` | integer | yes | MUST be a JSON integer greater than 1. It is the total number of attempts, including the original. Values above the client's limit (5 by default) are treated as that limit and are not a validation error. |
-| `hedgingDelay` | Duration | no | If present, MUST be a valid Duration string. It is the interval between starting successive attempts. Absent or `"0s"` means all `maxAttempts` attempts are started at once. |
-| `nonFatalStatusCodes` | array of status codes | no | If present, MUST be a JSON array of valid status codes, each an integer or the exact upper-case name. Absent means every non-OK status is fatal. |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `maxAttempts` | uint32 | Yes | — | MUST be a JSON integer greater than 1. Total number of attempts, including the original. Values above the client's limit (5 by default) are treated as that limit and are not a validation error. |
+| `hedgingDelay` | Duration | No | `"0s"` | If present, MUST be a valid Duration string and MUST NOT be negative; a negative value (including one with a zero seconds part, such as `"-0.5s"`) makes the service config invalid. Interval between starting successive attempts. Absent or `"0s"` means all `maxAttempts` attempts are started at once. |
+| `nonFatalStatusCodes` | list of status code | No | `[]` | If present, MUST be a JSON array of valid status codes, each an integer or the exact upper-case name. Absent or empty means every non-OK status is fatal. |
 
 ### 3.2 Behavior
 
@@ -200,7 +208,12 @@ safe to run more than once.
 ## 4. Retry Throttling
 
 ```json
-"retryThrottling": { "maxTokens": 10, "tokenRatio": 0.1 }
+{
+  "retryThrottling": {
+    "maxTokens": 10,
+    "tokenRatio": 0.1
+  }
+}
 ```
 
 Throttling turns off retries and hedging when the ratio of failures to
@@ -209,10 +222,10 @@ retries. It is set at the top level of the service config, not per method.
 
 ### 4.1 Fields and Validation
 
-| JSON field | Type | Required | Validation |
-| --- | --- | --- | --- |
-| `maxTokens` | integer | yes | MUST be a JSON integer in the range (0, 1000]. |
-| `tokenRatio` | number | yes | MUST be a JSON number greater than 0. Only 3 decimal places are used. Further digits are dropped, so `0.5466` is treated as `0.546`. |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `maxTokens` | uint32 | Yes | — | MUST be a JSON integer in the range `(0, 1000]`. |
+| `tokenRatio` | number | Yes | — | MUST be a JSON number greater than 0. Only 3 decimal places are used; further digits are dropped, so `0.5466` is treated as `0.546`. |
 
 ### 4.2 Token Accounting
 
@@ -229,7 +242,11 @@ Implementations MAY share it among channels to the same target.
 - Each attempt that **fails** in a way that counts subtracts 1, down to 0. A
   failure counts if its status code is in `retryableStatusCodes` (retry
   policy) or `nonFatalStatusCodes` (hedging policy), or if the response
-  carries a pushback that says not to retry. Other failures, for example
+  carries a pushback that says not to retry. The pushback rule applies to
+  every RPC on the channel, whether or not it has a retry or hedging policy.
+  A failure counts even if the RPC is already committed to the attempt (for
+  example, a server-streaming RPC that fails after response headers, or an
+  RPC whose messages overflowed the retry buffer). Other failures, for example
   `INVALID_ARGUMENT`, leave `token_count` unchanged. That way, responses to
   malformed requests are not mistaken for server trouble.
 - Transparent retries ([Transparent Retries](#8-transparent-retries)) do not count as
@@ -327,6 +344,9 @@ the RPC's outgoing data is still buffered.
   right away. Each message still being replayed is freed as soon as it is
   sent.
 - When the RPC completes, all of its buffered data is freed.
+- How buffered byte usage is measured (for example, whether request metadata
+  overhead is counted and whether message size is measured before or after
+  compression and framing) is implementation-defined.
 
 ## 8. Transparent Retries
 

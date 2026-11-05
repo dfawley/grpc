@@ -63,7 +63,7 @@ fields read by the client:
 
 | Field | Rule |
 | --- | --- |
-| `rds` | One of `rds` or `route_config` MUST be set (see [Route Configuration Source](#4-route-configuration-source)). If `rds` is set, `rds.config_source` MUST be present and have `ads` or `self` set. `rds.route_config_name` is the name of the `RouteConfiguration` resource to fetch. |
+| `rds` | One of `rds` or `route_config` MUST be set (see [Route Configuration Source](#4-route-configuration-source)). If `rds` is set, `rds.config_source` MUST be present and have `ads` or `self` set. `rds.route_config_name` is the name of the `RouteConfiguration` resource to fetch; the empty string is a valid name. |
 | `route_config` | An inline `RouteConfiguration`, validated exactly like an RDS resource (see [RouteConfiguration](03-route-configuration.md)). Errors in it reject the Listener. |
 | `scoped_routes` | Not supported. If the route specifier is neither `rds` nor `route_config`, the resource is rejected. |
 | `http_filters` | The ordered list of xDS HTTP filters. Validated as specified in [xDS HTTP Filters](../07-http-filters.md): each filter needs a non-empty name that is unique in the list; an unsupported filter type, or a filter that does not support clients, is rejected unless `is_optional` is true (then the filter is skipped); filter configs are validated by the filter implementation; at least one filter must remain; the last filter must be terminal (the router) and no other filter may be terminal. |

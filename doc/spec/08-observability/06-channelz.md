@@ -14,8 +14,8 @@ subchannels, servers, and sockets that exist in a process, together with
 per-entity statistics and a bounded log of recent events. Applications and
 tools query it remotely through the `grpc.channelz.v1.Channelz` service. The
 canonical data model and service definition is
-`grpc/channelz/v1/channelz.proto`, which this section refers to as "the
-proto".
+[`grpc/channelz/v1/channelz.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/channelz/v1/channelz.proto),
+which this section refers to as "the proto".
 
 ## 1. Terminology
 
@@ -98,7 +98,7 @@ Rules:
 | `target` | The target the channel was created with. MAY be absent, notably for subchannels. A child channel's target may differ from its parent's. |
 | `trace` | The channel trace ([Channel Trace](#7-channel-trace)). MAY be absent. |
 | `calls_started`, `calls_succeeded`, `calls_failed` | Calls started on this entity, and calls that completed with an `OK` or non-`OK` status. For a channel, these count application calls on that channel. For a subchannel, they count calls (attempts) dispatched to that subchannel. `started − succeeded − failed` is the number of calls in flight. |
-| `last_call_started_timestamp` | When the most recent call was started on this entity. |
+| `last_call_started_timestamp` | When the most recent call was started on this entity. Unset if no call has started. |
 | `max_connections_per_subchannel` | **Subchannels only.** The maximum number of connections that connection scaling currently allows for this subchannel (see [Subchannels](../04-client-channel/07-subchannels.md)). Unset (0) for channels. |
 
 All data is specific to the entity itself. A parent does **not** aggregate the
@@ -119,7 +119,7 @@ connected sockets are retrieved with `GetServerSockets` ([Pagination](#9-paginat
 | --- | --- |
 | `trace` | The server's trace ([Channel Trace](#7-channel-trace)). MAY be absent. Typical events include connections accepted, timeouts, protocol violations, and shutdown progress. |
 | `calls_started`, `calls_succeeded`, `calls_failed` | Incoming calls started, and calls that completed with an `OK` or non-`OK` status. |
-| `last_call_started_timestamp` | When the most recent incoming call started. |
+| `last_call_started_timestamp` | When the most recent incoming call started. Unset if no call has started. |
 
 ## 6. Socket Data
 
@@ -146,9 +146,9 @@ the owning subchannel or server.
 | `streams_failed` | All other stream terminations. Client: ended without receiving end-of-stream. Server: ended without sending end-of-stream. |
 | `messages_sent`, `messages_received` | gRPC messages successfully sent and received on this socket. A call may send or receive any number of messages, including zero. |
 | `keep_alives_sent` | Keepalive pings sent by the local endpoint (see [HTTP/2 Client Transport: Keepalive](../04-client-channel/08-transports/02-http2.md#61-keepalive) and [HTTP/2 Server Transport: Keepalive](../05-server/02-transports/02-http2.md#71-keepalive)). MUST NOT count ping ACKs, or pings sent for reasons other than keepalive (for example, bandwidth or RTT estimation). |
-| `last_local_stream_created_timestamp` | When this endpoint last created a stream. Normally unset for servers, which do not create streams. |
-| `last_remote_stream_created_timestamp` | When the remote endpoint last created a stream. Normally unset for clients. |
-| `last_message_sent_timestamp`, `last_message_received_timestamp` | When the last message was sent and received. |
+| `last_local_stream_created_timestamp` | When this endpoint last created a stream. Unset if no stream has been created (normally unset for servers, which do not create streams). |
+| `last_remote_stream_created_timestamp` | When the remote endpoint last created a stream. Unset if no stream has been created (normally unset for clients). |
+| `last_message_sent_timestamp`, `last_message_received_timestamp` | When the last message was sent and received. Each is unset until a message has been sent or received. |
 | `local_flow_control_window` | Connection-level flow-control window that the remote endpoint has granted to the local endpoint. Excludes stream-level and TCP-level flow control. Unset if the transport has no flow control or the value is unknown. |
 | `remote_flow_control_window` | Connection-level flow-control window that the local endpoint has granted to the remote endpoint, with the same rules. |
 | `option` | Socket options ([Socket Options](#62-socket-options)). MAY be omitted when `GetSocketRequest.summary` is true. |
@@ -192,6 +192,10 @@ it would be impractical.
 | `tcpip_address` | `ip_address`: 4 bytes (IPv4) or 16 bytes (IPv6), in network byte order. `port`: 0–65535, or −1 if not applicable. |
 | `uds_address` | `filename`: the Unix domain socket path. |
 | `other_address` | `name`: a human-readable form, which SHOULD be set. `value`: a `google.protobuf.Any` with type-specific details. |
+
+An address that is neither a TCP/IP address nor a Unix domain socket address
+SHOULD be reported as `other_address` with `name` set, rather than as an
+`Address` with no variant set.
 
 ### 6.4 Security
 
@@ -266,6 +270,8 @@ following MUST be logged:
 | Subchannel | Out-of-band backend metrics stream failed with `UNIMPLEMENTED` (see [ORCA](../07-services/03-orca.md)) |
 
 Implementations MAY log additional events that are useful and infrequent.
+Implementations SHOULD NOT add a trace event for a name resolution result
+that causes none of the resolution changes listed above.
 
 ## 8. The Channelz Service
 
@@ -279,7 +285,7 @@ The service is `grpc.channelz.v1.Channelz`:
 | `GetServerSockets` | `server_id`, `start_socket_id`, `max_results` | `socket_ref[]`, `end` | Lists references to the server's connected sockets. Paginated. `NOT_FOUND` if the server does not exist. |
 | `GetChannel` | `channel_id` | `channel` | Returns one channel (top or child), or `NOT_FOUND`. |
 | `GetSubchannel` | `subchannel_id` | `subchannel` | Returns one subchannel, or `NOT_FOUND`. |
-| `GetSocket` | `socket_id`, `summary` | `socket` | Returns one socket, or `NOT_FOUND`. If `summary` is true, the response contains only information that is cheap to obtain. Fields documented as omissible (such as `SocketData.option`) MAY be left out. |
+| `GetSocket` | `socket_id`, `summary` | `socket` | Returns one socket, or `NOT_FOUND`. If `summary` is true, the server MAY omit fields that are expensive to obtain (such as `SocketData.option`). |
 
 The `Get<Entity>` methods MUST return `NOT_FOUND` when no entity of the
 requested type has the given id. This includes ids that belong to an entity of
@@ -297,7 +303,10 @@ continuation token:
 - `max_results`: if positive, the response MUST contain at most that many
   items. If zero, the server picks a reasonable page size (RECOMMENDED: 100).
   The server MAY return fewer items than requested, for example under load.
-  Negative values are invalid.
+  Clients MUST NOT send a negative value. How the server handles one is
+  implementation-defined (for example, it can reject the request with
+  `INVALID_ARGUMENT` or treat the value as zero), but the server MUST NOT
+  treat it as an unlimited page size.
 - `end`: true if there are no more entities after the last one returned.
   Later requests can return more only for entities created after this
   response. A response with no items MUST set `end` to true.

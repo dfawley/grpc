@@ -92,7 +92,7 @@ its full type names.
 | Fault injection | `fault.v3.HTTPFault` | `fault.v3.HTTPFault` | yes | no | no | [Fault Injection](#8-fault-injection) |
 | RBAC | `rbac.v3.RBAC` | `rbac.v3.RBACPerRoute` | no | yes | no | [RBAC](#9-rbac) |
 | Stateful session | `stateful_session.v3.StatefulSession` | `stateful_session.v3.StatefulSessionPerRoute` | yes | no | no | [Stateful Session Affinity](#10-stateful-session-affinity) |
-| GCP authentication | `gcp_authn.v3.GcpAuthnFilterConfig` | — (see [Configuration Validation](#111-configuration-validation)) | yes | no | no | [GCP Authentication](#11-gcp-authentication) |
+| GCP authentication | `gcp_authn.v3.GcpAuthnFilterConfig` | — (see [GCP Authentication Filter: Configuration Validation](../10-vendor-specific/04-gcp-authentication-filter.md#1-configuration-validation)) | yes | no | no | [GCP Authentication](#11-gcp-authentication) |
 
 The router is the only terminal filter type. Implementations MAY hard-code
 the requirement that the router is the last filter instead of implementing a
@@ -109,8 +109,11 @@ filter type is determined as follows:
    actual type is taken from the `TypedStruct.type_url` field (same
    extraction rule), and the configuration is the `TypedStruct.value`
    (`google.protobuf.Struct`, treated as a JSON object; absent means an empty
-   object). This allows third-party configurations to be expressed without a
-   concrete proto message type.
+   object). This allows third-party configurations (such as custom RBAC audit
+   loggers) to be expressed without a concrete proto message type. All built-in
+   xDS HTTP filters in [Router](#7-router)–[GCP Authentication](#11-gcp-authentication)
+   accept only their concrete protobuf configuration message in `Any`; wrapping
+   a built-in filter's configuration in `TypedStruct` fails validation (NACK).
 3. For override configurations only: if the type is
    `envoy.config.route.v3.FilterConfig`, the actual configuration is the
    `FilterConfig.config` field (to which step 1 and 2 are then applied), and
@@ -166,8 +169,8 @@ containing the RouteConfiguration:
 |---|---|
 | Key empty | NACK. |
 | Value type cannot be extracted (including an unparseable `FilterConfig` or `TypedStruct`) | NACK. |
-| Override config type not registered by any filter type | If `FilterConfig.is_optional` is true (only possible when the `FilterConfig` wrapper is used), the entry is ignored. Otherwise NACK. |
-| Type known | The filter implementation validates the configuration as an override. It fails validation if the value is the filter's top-level config type and the filter either does not support overrides or uses a different override type. Failure → NACK. |
+| Override config type not registered by any filter type (neither as a top-level nor as an override config type) | If `FilterConfig.is_optional` is true (only possible when the `FilterConfig` wrapper is used), the entry is ignored. Otherwise NACK. |
+| Type known | The filter implementation validates the configuration as an override. Unless the filter's specification states otherwise (see [GCP Authentication Filter: Configuration Validation](../10-vendor-specific/04-gcp-authentication-filter.md#1-configuration-validation)), validation fails if the value is the filter's top-level config type and the filter either does not support overrides or uses a different override type. Failure → NACK, even if `FilterConfig.is_optional` is true. |
 | Key names no instance in the HCM | Not an error (the validator cannot know which HCM will use the RouteConfiguration). |
 | Filter type is supported only on the other side (client vs. server) | Not an error (the validator cannot know whether the RouteConfiguration will be used by a client or a server). |
 
@@ -262,7 +265,7 @@ they started.
 ## 6. Filter State Retention Across Updates
 
 Some filter types maintain state that SHOULD survive configuration updates
-(e.g., the GCP authentication call-credentials cache, [Call Credentials Cache](#114-call-credentials-cache)). gRPC
+(e.g., the GCP authentication call-credentials cache, [GCP Authentication Filter: Call Credentials Cache](../10-vendor-specific/04-gcp-authentication-filter.md#4-call-credentials-cache)). gRPC
 provides a general mechanism for this:
 
 - Retained state is scoped to a **filter instance**, identified by the pair
@@ -322,18 +325,16 @@ provides a general mechanism for this:
 | `delay` (`envoy.extensions.filters.common.fault.v3.FaultDelay`) | Optional. See below. |
 | `delay.fixed_delay` | `google.protobuf.Duration`; validated as a Duration (`seconds` in [0, 315576000000], `nanos` in [0, 999999999], else NACK). The delay to inject. |
 | `delay.header_delay` | If set, the delay is taken from request headers ([Header-Controlled Faults](#83-header-controlled-faults)). |
-| `delay.percentage` | `envoy.type.v3.FractionalPercent`: `numerator` and `denominator` (`HUNDRED` = 100, `TEN_THOUSAND` = 10000, `MILLION` = 1000000; default `HUNDRED`). If unset, the probability is 0. |
-| `abort` (`FaultAbort`) | Optional. See below. |
-| `abort.http_status` | An HTTP status code. Converted to a gRPC status code using the HTTP-to-gRPC status mapping (`400`→`INTERNAL`, `401`→`UNAUTHENTICATED`, `403`→`PERMISSION_DENIED`, `404`→`UNIMPLEMENTED`, `429`/`502`/`503`/`504`→`UNAVAILABLE`, any other→`UNKNOWN`). In particular `200` maps to `UNKNOWN` (as if an HTTP 200 response arrived without `grpc-status`). |
-| `abort.grpc_status` | A gRPC status code number. MUST be a valid code (0–16), else NACK. `0` (`OK`) is allowed ([`OK` and HTTP 200 Aborts](#84-ok-and-http-200-aborts)). |
+| `delay.percentage` | `envoy.type.v3.FractionalPercent`: `numerator` and `denominator` (`HUNDRED` = 100, `TEN_THOUSAND` = 10000, `MILLION` = 1000000; default `HUNDRED`; see [Fractional Percentages](04-resources/01-common-types.md#5-fractional-percentages)). If unset, the probability is 0. |
+| `abort` (`FaultAbort`) | Optional. See below. If set, its `error_type` (one of `http_status`, `grpc_status`, and `header_abort`) MUST be set, else NACK. |
+| `abort.http_status` | An HTTP status code. MUST be in [200, 600), else NACK. Converted to a gRPC status code using the HTTP-to-gRPC status mapping (`400`→`INTERNAL`, `401`→`UNAUTHENTICATED`, `403`→`PERMISSION_DENIED`, `404`→`UNIMPLEMENTED`, `429`/`502`/`503`/`504`→`UNAVAILABLE`, any other→`UNKNOWN`). In particular `200` maps to `UNKNOWN` (as if an HTTP 200 response arrived without `grpc-status`). |
+| `abort.grpc_status` | A gRPC status code number. Any value is accepted; a value that is not a valid code (0–16) aborts with `UNKNOWN`. `0` (`OK`) is allowed ([`OK` and HTTP 200 Aborts](#84-ok-and-http-200-aborts)). |
 | `abort.header_abort` | If set, the abort status is taken from request headers ([Header-Controlled Faults](#83-header-controlled-faults)). |
 | `abort.percentage` | As `delay.percentage`. |
 | `max_active_faults` | `google.protobuf.UInt32Value`. If set, the maximum number of concurrently active faults process-wide ([Maximum Active Faults](#85-maximum-active-faults)). If unset, unlimited. |
 | `response_rate_limit` | Not supported; ignored. |
 | `downstream_nodes`, `upstream_cluster`, `headers` | Not supported; ignored. |
 | Runtime-key fields (`delay_percent_runtime`, `abort_percent_runtime`, etc.) | Not supported (gRPC has no runtime); ignored. |
-
-<!-- REVIEW(divergence) [XDS_FAULT-2]: FaultAbort code validation differs. grpc_status > 16: C++ NACKs (xds_http_fault_filter.cc); Java maps to UNKNOWN (Status.fromCodeValue, FaultFilter.java); Go maps to UNKNOWN (sanitizeGRPCCode, fault.go). http_status outside [200, 600): Go accepts the config but never aborts (grpcFromHTTP); Java and C++ map it (C++ treats 0 as unset). abort with no error_type: Java NACKs; C++/Go accept and never abort. Envoy fault.proto requires error_type and http_status in [200, 600) and does not range-check grpc_status. Spec says: grpc_status MUST be 0–16 else NACK; any http_status is mapped; unset error_type not covered. -->
 
 ### 8.2 Per-RPC Algorithm
 
@@ -450,8 +451,11 @@ not supported.
 | `RBAC.rules.policies` | Map of policy name → `Policy`. Each `Policy` has `permissions` and `principals` (see [Mapping RBAC Fields to gRPC](#92-mapping-rbac-fields-to-grpc)). |
 | `Policy.condition`, `Policy.checked_condition` | CEL is not supported; presence → NACK. |
 | `header` matcher (in any `Permission` or `Principal`) naming a header that starts with `grpc-`, or `:scheme` | NACK. |
-| Nesting of `and_rules`/`or_rules`/`not_rule` | Validated recursively; implementations MAY impose a maximum recursion depth, exceeding which → NACK. |
-| String, path, header, CIDR, and metadata matchers | Validated as in [Common Types](04-resources/01-common-types.md); invalid → NACK. |
+| Nesting of `Permission` (`and_rules`/`or_rules`/`not_rule`) or `Principal` (`and_ids`/`or_ids`/`not_id`) | Validated recursively; implementations MAY impose a maximum recursion depth, exceeding which → NACK. |
+| String and header matchers | Validated as in [Common Types](04-resources/01-common-types.md) ([`StringMatcher`](04-resources/01-common-types.md#7-stringmatcher), [`HeaderMatcher`](04-resources/01-common-types.md#8-headermatcher)); invalid → NACK. |
+| `CidrRange` (in `destination_ip`, `source_ip`, `direct_remote_ip`, `remote_ip`) | `address_prefix` MUST be an IPv4 or IPv6 address literal; an empty string or a host name → NACK. `prefix_len` MUST be at most 128, else NACK; an absent `prefix_len` is 0, and a value above the address width (32 for IPv4) is treated as the address width. |
+| `url_path` (`envoy.type.matcher.v3.PathMatcher`) | `path` MUST be present and contain a valid `StringMatcher`; absent or invalid → NACK. |
+| `metadata` (`envoy.type.matcher.v3.MetadataMatcher`) | `filter`, `path`, and `value` are ignored (not validated); only `invert` is read ([Mapping RBAC Fields to gRPC](#92-mapping-rbac-fields-to-grpc)). |
 | `RBAC.shadow_rules`, `shadow_rules_stat_prefix`, `rules_stat_prefix` | Not supported; ignored. |
 | `RBAC.rules.audit_logging_options` | See [Audit Logging Configuration](#93-audit-logging-configuration). |
 | `RBACPerRoute.rbac` | If set, validated exactly as a top-level `RBAC`. |
@@ -466,6 +470,8 @@ All failures above NACK the resource containing the configuration (the
 Listener for top-level configuration; the resource containing the
 RouteConfiguration for overrides).
 
+<!-- REVIEW(judgment) [XDS_RBAC-21]: Unlisted RBAC.matcher field (xds.type.matcher.v3.Matcher). envoy.extensions.filters.http.rbac.v3.RBAC (also used inside RBACPerRoute.rbac) also contains matcher (an xDS unified matcher tree alternative to rules; when both are set Envoy ignores rules), shadow_matcher, and track_per_rule_stats. C++, Java, and Go all ignore matcher, so an RBAC config using matcher instead of rules is accepted as a no-op and allows all RPCs (failing open on authorization). Under Architecture §2.2 rule 3, ignoring an active authorization policy field weakens security and argues for NACKing when matcher is set, while shadow_matcher and track_per_rule_stats are safe to ignore. Spec currently omits matcher, shadow_matcher, and track_per_rule_stats. -->
+
 ### 9.2 Mapping RBAC Fields to gRPC
 
 `Permission` fields that need interpretation:
@@ -476,7 +482,7 @@ RouteConfiguration for overrides).
 | `url_path` | The fully-qualified method name with leading slash (the `:path` value), e.g. `/pkg.Service/Method`. |
 | `destination_ip` | Local IP address of the connection. |
 | `destination_port` | Local port of the connection. |
-| `metadata` | Envoy dynamic metadata, which gRPC treats as an empty map; therefore never matches (a `ValueMatcher` requires a value to be present). |
+| `metadata` | Envoy dynamic metadata, which gRPC treats as an empty map. Because no metadata entry is ever present, an uninverted `MetadataMatcher` never matches, and a `MetadataMatcher` with `invert: true` always matches (`filter`, `path`, and `value` are ignored). |
 | `requested_server_name` | Treated as the empty string; matches only if the matcher accepts `""`. |
 
 `Principal` fields that need interpretation:
@@ -502,7 +508,7 @@ semantics of the shared RBAC engine, specified in
 can be matched with their on-the-wire values; `Host` and `:authority` are
 aliases; hop-by-hop headers (including `te`) are absent; the client-sent
 `content-type` is used; multiple values are joined with `,`; `-bin` headers
-are matched in base64-encoded form; and an absent header does not match
+are matched in unpadded base64-encoded form; and an absent header does not match
 except for a `present_match` whose value equals `invert_match`. These differ
 from the client-side routing semantics in
 [Common Types](04-resources/01-common-types.md).
@@ -582,7 +588,7 @@ In the table, `CookieBasedSessionState` is
 | Field | Handling |
 |---|---|
 | `StatefulSession.session_state` | `TypedExtensionConfig`. If unset, the instance is a no-op. |
-| `session_state.typed_config` | MUST be `CookieBasedSessionState` (after `TypedStruct` unwrapping); any other type or an unparseable message → NACK. |
+| `session_state.typed_config` | MUST be a serialized `CookieBasedSessionState` protobuf message in `Any` (a `TypedStruct`-wrapped `CookieBasedSessionState`, any other type, or an unparseable message → NACK). |
 | `CookieBasedSessionState.cookie` | Required (`envoy.type.http.v3.Cookie`); absent → NACK. |
 | `cookie.name` | Required, non-empty; empty → NACK. |
 | `cookie.path` | Optional. If empty, all request paths match. |
@@ -618,9 +624,10 @@ For each RPC with an enabled effective configuration (non-empty cookie name):
    RPC's `:path` per RFC 6265 §5.1.4, SSA is skipped entirely for this RPC
    (including response processing). (If the cookie path does not match the paths of the RPCs routed to this
    configuration, the cookie is never set.)
-2. **Cookie extraction.** Parse the `cookie` request header (RFC 6265
-   §4.2.1) and take the value of the first cookie whose name equals
-   `cookie.name`. If there is none, or the value is not valid base64, treat
+2. **Cookie extraction.** Parse every `cookie` request metadata entry
+   (RFC 6265 §4.2.1), each on its own or, equivalently, all of them joined in
+   order with `"; "` (RFC 9113 §8.2.3), and take the value of the first cookie,
+   across all entries, whose name equals `cookie.name`. If there is none, or the value is not valid base64, treat
    the cookie as absent (empty address list and cluster).
 3. **Override-host attribute.** Attach to the RPC an *override-host call
    attribute* carrying the cookie's address list (possibly empty). This
@@ -666,87 +673,11 @@ response, when the trailers are received), if SSA was not skipped for the RPC:
 
 ## 11. GCP Authentication
 
-> **Introduced by:** [gRFC A83: xDS GCP Authentication Filter](https://github.com/grpc/proposal/blob/master/A83-xds-gcp-authn-filter.md)
-
-The GCP authentication filter attaches a GCP service-account identity JWT to
-RPCs, as call credentials, with a per-cluster audience.
-
-- **Config type:** `envoy.extensions.filters.http.gcp_authn.v3.GcpAuthnFilterConfig`.
-- **Sides:** client only. **Terminal:** no.
-
-### 11.1 Configuration Validation
-
-| Field | Handling |
-|---|---|
-| `cache_config` | Optional. |
-| `cache_config.cache_size` | Optional `UInt64Value`. If set, MUST be > 0, else NACK. Default 10. Implementations MAY cap it at their maximum supported size. |
-| `http_uri`, `token_header`, `retry_policy`, `cluster`, `timeout` | Ignored. |
-
-Per-route overrides are not supported. If a `GcpAuthnFilterConfig` appears in a
-`typed_per_filter_config` map, it is validated as part of normal resource
-validation (as a top-level config), but it is never used.
-
-<!-- REVIEW(divergence) [XDS_GCP_AUTHN-1]: A83 says an override is "validated ... but will not
-actually be used". Java: override parsed/validated as top-level config, then
-ignored (GcpAuthenticationFilter.java parseFilterConfigOverride). Go: same
-(internal/xds/httpfilter/gcpauthn/gcp_authn_filter.go). C++: no override type
-registered (OverrideConfigProtoName() == ""), so an override NACKs unless
-is_optional (src/core/xds/grpc/xds_http_gcp_authn_filter.cc). Spec says: follow
-A83 (validate, ignore). -->
-
-### 11.2 Audience from Cluster Metadata
-
-The audience comes from the CDS resource of the RPC's cluster. CDS
-`Cluster.metadata` is parsed into a metadata map as described in
-[Cluster](04-resources/04-cluster.md) and
-[Common Types](04-resources/01-common-types.md); the registered metadata
-type `envoy.extensions.filters.http.gcp_authn.v3.Audience` (whose `url` MUST be
-non-empty, else the CDS resource is NACKed) parses to an audience string.
-
-The metadata key looked up is the xDS HTTP filter **instance name**
-(`HttpFilter.name`), not a fixed key.
-
-### 11.3 Per-RPC Behavior
-
-When the RPC's request headers are processed, using the RPC's finalized
-cluster and the `XdsConfig` ([Client](#51-client)):
-
-1. If the CDS resource for the cluster is not available in the current
-   `XdsConfig` (e.g., an error was received with no previously valid resource,
-   or the resource does not exist), fail the RPC with `UNAVAILABLE`. (The RPC
-   is failed even if it is wait-for-ready, because it cannot be re-processed
-   with a later configuration.)
-2. Look up the instance name in the cluster's metadata map. If absent, do
-   nothing.
-3. If the entry is not of type `Audience`, fail the RPC with `UNAVAILABLE`.
-4. Otherwise, obtain from the instance's cache ([Call Credentials Cache](#114-call-credentials-cache)) the GCP
-   service-account identity call credentials for the audience `url`, creating
-   and inserting them if absent, and attach them to the RPC.
-
-
-The token is not added by this step directly, because the connection is not
-yet known. The attached call credentials add the token after a connection has
-been chosen, and MUST NOT send it on connections whose security level does
-not permit call credentials (e.g., insecure connections). The GCP
-service-account identity call credentials (token fetch from the metadata
-server, caching, refresh, backoff, error-to-status mapping, and the
-`authorization: Bearer <token>` header) are specified in
-[Call Credentials](../06-security/03-call-credentials.md).
-
-### 11.4 Call Credentials Cache
-
-Each filter instance maintains an LRU cache mapping audience → call
-credentials object:
-
-- Using an entry moves it to the most-recently-used position. Inserting into a
-  full cache evicts the least-recently-used entry.
-- The maximum size is `cache_config.cache_size`. The cache is channel-wide:
-  shared by all routes.
-- The cache is retained across LDS and RDS updates using the mechanism of
-  [Filter State Retention Across Updates](#6-filter-state-retention-across-updates), keyed by instance name, so two instances never share a cache and the
-  same instance keeps its cache across updates.
-- If an update changes `cache_size`, the new size is applied to the retained
-  cache, evicting least-recently-used entries as needed.
+The GCP authentication xDS HTTP filter
+(`envoy.extensions.filters.http.gcp_authn.v3.GcpAuthnFilterConfig`) is a
+vendor-specific filter that attaches GCP service account identity call
+credentials to RPCs. It is specified in
+[GCP Authentication Filter](../10-vendor-specific/04-gcp-authentication-filter.md).
 
 ## 12. API Requirements
 

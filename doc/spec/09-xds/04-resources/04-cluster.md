@@ -5,7 +5,7 @@
 
 # 9.4.4 Cluster
 
-<!-- Sources: A27, A29, A32, A37, A42, A47, A48, A50, A52, A55, A61, A75, A81, A83, A85, A86, A101, A105, doc/grpc_xds_features.md -->
+<!-- Sources: A27, A29, A32, A37, A42, A47, A48, A50, A52, A55, A61, A64, A75, A81, A83, A85, A86, A101, A105, doc/grpc_xds_features.md -->
 
 > **Introduced by:** [gRFC A27: xDS-Based Global Load Balancing](https://github.com/grpc/proposal/blob/master/A27-xds-global-load-balancing.md)
 
@@ -52,7 +52,7 @@ the following is accepted. Anything else (`type` = `STATIC`, `STRICT_DNS`, or
 | `...lb_endpoints[0].endpoint` | MUST be present. |
 | `...endpoint.address` | MUST be present, with `socket_address` set. |
 | `...socket_address.address` | MUST be non-empty. It is a DNS name (or IP literal) to resolve. |
-| `...socket_address.port_value` | MUST be set. |
+| `...socket_address.port_value` | MUST be in the range 1–65535. An unset port, an explicit `0`, or a value above 65535 rejects the resource. |
 | `...socket_address.resolver_name` | MUST be empty; custom resolvers are not supported. |
 
 Violations reject the resource. All other fields of `load_assignment` are
@@ -84,6 +84,11 @@ Resolving the aggregate cluster graph (recursion, depth limit, cycles,
 de-duplication) is specified in [Client Data Plane](../05-client.md).
 
 ## 2. LB Policy
+
+> **Experimental:** The registered LB policy names `ring_hash_experimental`,
+> `least_request_experimental`, and `xds_wrr_locality_experimental` still
+> carry the `_experimental` suffix. See
+> [xDS LB Policies](../06-lb-policies.md) for the current registered names.
 
 The cluster's LB policy is converted to a gRPC LB policy configuration (a
 JSON `LoadBalancingConfig` list; see
@@ -147,14 +152,9 @@ client-side ring size cap then limits both (see
 As with `load_balancing_policy`, the converted config MUST parse with the
 gRPC LB policy registry, or the resource is rejected.
 
-> **Experimental:** The registered LB policy names `ring_hash_experimental`,
-> `least_request_experimental`, and `xds_wrr_locality_experimental` still
-> carry the `_experimental` suffix. See
-> [xDS LB Policies](../06-lb-policies.md) for the current registered names.
-
 ## 3. Circuit Breakers
 
-> **Introduced by:** [gRFC A32: gRPC xDS circuit breaking](https://github.com/grpc/proposal/blob/master/A32-xds-circuit-breaking.md)
+> **Introduced by:** [gRFC A32: gRPC xDS circuit breaking](https://github.com/grpc/proposal/blob/master/A32-xds-circuit-breaking.md), [gRFC A105: MAX_CONCURRENT_STREAMS Connection Scaling](https://github.com/grpc/proposal/blob/master/A105-max_concurrent_streams-connection-scaling.md)
 
 `circuit_breakers` (`envoy.config.cluster.v3.CircuitBreakers`):
 
@@ -241,13 +241,12 @@ All other `common_lb_config` fields are ignored.
 
 `transport_socket.typed_config` (an `Any`; see [Extensions: `google.protobuf.Any` and `TypedStruct`](01-common-types.md#2-extensions-googleprotobufany-and-typedstruct) in
 [Common Types](01-common-types.md)), if present, MUST be one of the following.
-Any other type rejects the resource. `transport_socket.name` and
-`transport_socket_matches` are ignored.
+Any other type rejects the resource. `transport_socket.name` is ignored
+(including in a nested `transport_socket`). A non-empty
+`transport_socket_matches` rejects the resource.
 
 - `envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext`: Validated and parsed as specified in [xDS Security](../09-security.md). The parsed TLS config is used only if the channel uses xDS credentials.
 - `envoy.extensions.transport_sockets.http_11_proxy.v3.Http11ProxyUpstreamTransport`: HTTP CONNECT wrapper (see below).
-
-<!-- REVIEW(divergence) [XDS_CDS-3]: transport_socket.name and transport_socket_matches. C++ ignores both. Java (XdsClusterResource) and Go (unmarshal_cds.go securityConfigFromCluster) reject the Cluster if transport_socket_matches is non-empty or if transport_socket.name is not "envoy.transport_sockets.tls" (Java exempts an Http11ProxyUpstreamTransport typed_config). A29 only says transport_socket_matches is not supported; the name check is A29's rule for server Listeners. Spec says: both fields are ignored (C++). -->
 
 ### 6.1 `Http11ProxyUpstreamTransport`
 
@@ -275,7 +274,7 @@ Any other type rejects the resource. `transport_socket.name` and
 | Field | Rule |
 | --- | --- |
 | `lrs_server` | If absent, load reporting is disabled for the cluster. If present, it MUST have `self` set (otherwise the resource is rejected), and load reports for this cluster are sent to the xDS server the Cluster resource came from (see [LRS](../10-load-reporting.md)). |
-| `lrs_report_endpoint_metrics` | List of names of ORCA backend metrics to copy into load reports. Recognized entries: `cpu_utilization`, `mem_utilization`, `application_utilization`, `named_metrics.<key>` (one key of the ORCA `named_metrics` map), and `named_metrics.*` (all keys). Unrecognized entries are ignored. If the list is empty, no backend metrics are propagated. Propagated `named_metrics` keys appear in LRS with the `named_metrics.` prefix. See [LRS](../10-load-reporting.md). |
+| `lrs_report_endpoint_metrics` | List of names of ORCA backend metrics to copy into load reports. Recognized entries: `cpu_utilization`, `mem_utilization`, `application_utilization`, `named_metrics.<key>` (one key of the ORCA `named_metrics` map, where `<key>` MUST be non-empty and not `*`), and `named_metrics.*` (all keys). Unrecognized entries (including `"named_metrics."` with an empty `<key>`) are ignored. If the list is empty, no backend metrics are propagated. Propagated `named_metrics` keys appear in LRS with the `named_metrics.` prefix. See [LRS](../10-load-reporting.md). |
 
 ## 8. Upstream Connection Options
 
@@ -305,7 +304,7 @@ are used only for stateful session affinity (see
 `metadata` is parsed with the metadata rules and the metadata type registry
 in [Common Types](01-common-types.md) ([Metadata](01-common-types.md#9-metadata)). Errors reject the resource. The
 parsed map is part of the parsed cluster. The GCP authentication xDS HTTP
-filter uses it (see [xDS HTTP Filters](../07-http-filters.md)).
+filter uses it (see [GCP Authentication Filter](../../10-vendor-specific/04-gcp-authentication-filter.md)).
 
 ## 10. Ignored Fields
 

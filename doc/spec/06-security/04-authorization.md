@@ -5,7 +5,7 @@
 
 # 6.4 Authorization
 
-<!-- Sources: A41, A43, A59, src/core/lib/security/authorization (behavior cross-check) -->
+<!-- Sources: A41, A43, A59 -->
 
 gRPC servers can authorize each RPC against a policy. There are two ways to
 configure policies, and both run on the same **RBAC engine**:
@@ -67,11 +67,13 @@ The engine sees these attributes of a gRPC request:
 | Destination IP and port | The local address and port of the connection. |
 | Source / direct remote / remote IP | The peer address of the connection. All three are the same: gRPC does not use PROXY protocol or trust `x-forwarded-for` for this. |
 | Requested server name | Always the empty string. A matcher on it matches only if it accepts `""`. |
-| Envoy dynamic metadata | Always an empty map. `metadata` matchers never match. |
+| Envoy dynamic metadata | Always an empty map. `metadata` matchers never match unless `MetadataMatcher.invert` is `true` (which inverts the non-match to a match). |
 | Authenticated principal | Derived from the connection's TLS state ([Authenticated Principal Matching](#14-authenticated-principal-matching)). |
 
 ### 1.3 Header Matching Rules
 
+- Header names are matched **case-insensitively** (HTTP/2 header names are
+  lowercase on the wire).
 - `:method`, `:authority`, and `:path` can be matched. They MUST match the
   values received on the wire, even if the implementation stores them outside
   the metadata. If `:method` is not available, it MAY be treated as `POST`,
@@ -89,15 +91,16 @@ The engine sees these attributes of a gRPC request:
 - `Content-Type` is the value the client sent, not a fixed value.
 - If a header has several values, they are joined with `,` (a comma, no
   added spaces) and matched as one value.
-- Binary headers (`-bin` suffix) are matched in their base64-encoded form.
+- Binary headers (`-bin` suffix) are matched in their unpadded base64-encoded
+  form (RFC 4648 §4, with no `=` padding). Each value is encoded separately;
+  multiple values are then joined as described above.
 - If a header is absent, a header matcher does not match. The exception is a
   `present_match` whose value equals its `invert_match` flag, which does
   match. (`invert_match` inverts the comparison itself, so for example an
   inverted `exact_match` does not match an absent header.)
 - Matchers on headers with the `grpc-` prefix, and on `:scheme`, are not
-  allowed. Configurations that contain them are invalid.
-
-<!-- REVIEW(divergence) [AUTHZ-2]: Binary headers are not matched in base64 form everywhere. Java base64-encodes each -bin value (without padding) before matching. C++ (EvaluateArgs::GetHeaderValue → metadata GetStringValue) and Go (metadata from the transport, already base64-decoded) match the raw decoded bytes. Spec says: Binary headers (-bin suffix) are matched in their base64-encoded form. -->
+  allowed (names are compared case-insensitively). Configurations that contain
+  them are invalid.
 
 ### 1.4 Authenticated Principal Matching
 
@@ -128,58 +131,59 @@ subject.
 > **Introduced by:** [gRFC A43: gRPC authorization API](https://github.com/grpc/proposal/blob/master/A43-grpc-authorization-api.md)
 
 The gRPC authorization policy is a JSON document. gRPC translates it into two
-RBAC engines: a `DENY` engine built from `deny_rules` (if present), followed
-by an `ALLOW` engine built from `allow_rules`.
+RBAC engines: a `DENY` engine built from `deny_rules` (if present and
+non-empty), followed by an `ALLOW` engine built from `allow_rules`.
 
 ### 2.1 Schema
 
 ```json
 {
-  "name": "<string, required>",
-  "deny_rules": [ <rule>, ... ],
-  "allow_rules": [ <rule>, ... ],
+  "name": "example_authz_policy",
+  "deny_rules": [
+    {
+      "name": "deny_blocked_users",
+      "source": {
+        "principals": [ "spiffe://example.com/blocked/*" ]
+      },
+      "request": {
+        "paths": [ "/pkg.Service/*" ],
+        "headers": [
+          { "key": "x-env", "values": [ "prod" ] }
+        ]
+      }
+    }
+  ],
+  "allow_rules": [
+    {
+      "name": "allow_authenticated",
+      "source": {
+        "principals": [ "*" ]
+      }
+    }
+  ],
   "audit_logging_options": {
-    "audit_condition": "NONE" | "ON_DENY" | "ON_ALLOW" | "ON_DENY_AND_ALLOW",
+    "audit_condition": "ON_DENY",
     "audit_loggers": [
-      { "name": "<string>", "config": { ... }, "is_optional": <bool> }
+      { "name": "stdout_logger", "config": {}, "is_optional": false }
     ]
   }
 }
 ```
 
-`<rule>`:
-
-```json
-{
-  "name": "<string, required>",
-  "source": {
-    "principals": [ "<pattern>", ... ]
-  },
-  "request": {
-    "paths": [ "<pattern>", ... ],
-    "headers": [
-      { "key": "<header name>", "values": [ "<pattern>", ... ] }
-    ]
-  }
-}
-```
-
-Field rules:
-
-| Field | Type | Required | Rules |
-|-------|------|----------|-------|
-| `name` (policy) | string | Yes | For monitoring, error messages, and audit logs. |
-| `deny_rules` | array of rule | No | If present, MUST NOT be empty. |
-| `allow_rules` | array of rule | Yes | MUST NOT be empty. |
-| `audit_logging_options` | object | No | See [Audit Options in the gRPC Authorization Policy](#33-audit-options-in-the-grpc-authorization-policy). |
-| rule `name` | string | Yes | MUST be non-empty. SHOULD be unique within its list. |
-| rule `source` | object | No | If absent, matches any peer. |
-| `source.principals` | array of string | No | OR: matches if any pattern matches the authenticated principal ([Authenticated Principal Matching](#14-authenticated-principal-matching)). An empty array is the same as absent. |
-| rule `request` | object | No | If absent, matches any request. |
-| `request.paths` | array of string | No | OR: matches if any pattern matches the full method name `/package.Service/Method`. An empty array is the same as absent. |
-| `request.headers` | array of object | No | AND: matches only if every entry matches. An empty array is the same as absent. |
-| header `key` | string | Yes | The header name. It MUST NOT be a disallowed header (below). |
-| header `values` | array of string | Yes | MUST NOT be empty. OR: matches if any pattern matches the header value ([Header Matching Rules](#13-header-matching-rules)). |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `name` | string | Yes | — | Policy name for monitoring, error messages, and audit logs. MUST NOT be empty. |
+| `deny_rules` | list of object | No | `[]` | Deny rule objects. An empty array is the same as absent. |
+| `allow_rules` | list of object | Yes | — | Allow rule objects. MUST NOT be empty. |
+| `deny_rules[].name`, `allow_rules[].name` | string | Yes | — | Rule name; MUST be non-empty and SHOULD be unique within its list. |
+| `deny_rules[].source`, `allow_rules[].source` | object | No | — | Peer matching criteria. If absent, matches any peer. |
+| `deny_rules[].source.principals`, `allow_rules[].source.principals` | list of string | No | `[]` | OR: matches if any pattern ([Pattern Syntax](#22-pattern-syntax)) matches the authenticated principal ([Authenticated Principal Matching](#14-authenticated-principal-matching)). An empty array is the same as absent. |
+| `deny_rules[].request`, `allow_rules[].request` | object | No | — | Request matching criteria. If absent, matches any request. |
+| `deny_rules[].request.paths`, `allow_rules[].request.paths` | list of string | No | `[]` | OR: matches if any pattern matches the full method name `/package.Service/Method`. An empty array is the same as absent. |
+| `deny_rules[].request.headers`, `allow_rules[].request.headers` | list of object | No | `[]` | AND: matches only if every entry matches. An empty array is the same as absent. |
+| `deny_rules[].request.headers[].key`, `allow_rules[].request.headers[].key` | string | Yes | — | Header name; MUST NOT be a disallowed header (below). |
+| `deny_rules[].request.headers[].values`, `allow_rules[].request.headers[].values` | list of string | Yes | — | MUST NOT be empty. OR: matches if any pattern matches the header value ([Header Matching Rules](#13-header-matching-rules)). |
+| `audit_logging_options` | object | No | — | Audit logging configuration ([Audit Options in the gRPC Authorization Policy](#33-audit-options-in-the-grpc-authorization-policy)). |
 
 If two rules in the same list have the same `name`, the policy is still valid.
 The later rule replaces the earlier one, and the earlier rule is ignored.
@@ -194,12 +198,12 @@ a name starting with `:` (pseudo-headers), a name starting with `grpc-`,
 `proxy-authenticate`, `proxy-authorization`, `te`, `trailer`,
 `transfer-encoding`, `upgrade`). Names are compared case-insensitively.
 
-<!-- REVIEW(divergence) [AUTHZ-4]: Policy validation edge cases differ. Empty "deny_rules": [] is rejected by C++ ("rules is empty") but accepted as absent by Go and Java. An empty policy "name": "" is rejected by Go and Java but accepted by C++ (presence check only). The "grpc-" prefix check is case-sensitive in C++ and Java (a key "GRPC-foo" is accepted, and Java then matches it against grpc-foo because Metadata.Key lowercases); Go lowercases first and rejects it. Spec says: deny_rules, if present, MUST NOT be empty; policy name is required; disallowed header names are compared case-insensitively. -->
-
 **Unknown fields.** Any field the implementation does not recognize, at any
 level, makes the policy invalid. New fields may be added in the future. A
 version of gRPC that does not understand them MUST reject the policy, rather
-than ignore restrictions it cannot evaluate.
+than ignore restrictions it cannot evaluate. This rule doesn't cover the
+contents of `audit_loggers[].config`, which the logger validates
+([Audit Options in the gRPC Authorization Policy](#33-audit-options-in-the-grpc-authorization-policy)).
 
 **Type errors.** A field with the wrong JSON type makes the policy invalid.
 
@@ -217,6 +221,8 @@ than ignore restrictions it cannot evaluate.
 Matching is case-sensitive. The empty pattern `""` is an exact match on the
 empty string. For example, the principal `""` matches a TLS connection with no
 client certificate.
+
+<!-- REVIEW(divergence) [AUTHZ-20]: Patterns with more than one `*` or an interior `*` are neither rejected nor interpreted consistently. C++ (`GetMatcherType`) and Java (`getStringMatcher`) test a leading `*` first, so `*abc*` becomes suffix `abc*` and `**` becomes suffix `*`. Go (`getStringMatcher`/`getHeaderMatcher`) tests a trailing `*` first, so `*abc*` becomes prefix `*abc` and `**` becomes prefix `*`. All three treat `a*b` as the exact string `a*b`. Decide whether such patterns make the policy invalid or which interpretation is specified. -->
 
 ### 2.3 Decision Logic
 
@@ -331,18 +337,28 @@ RPC's final status.
 
 ### 3.3 Audit Options in the gRPC Authorization Policy
 
-`audit_logging_options`:
+```json
+{
+  "audit_logging_options": {
+    "audit_condition": "ON_DENY",
+    "audit_loggers": [
+      { "name": "stdout_logger", "config": {}, "is_optional": false }
+    ]
+  }
+}
+```
 
-| Field | Type | Default | Rules |
-|-------|------|---------|-------|
-| `audit_condition` | string enum | `NONE` | One of `NONE`, `ON_DENY`, `ON_ALLOW`, `ON_DENY_AND_ALLOW`. Any other value is invalid. |
-| `audit_loggers` | array of logger | empty | |
-| logger `name` | string | required | The registered logger type name. |
-| logger `config` | object | `{}` | Configuration for that logger type, as a JSON object. It MUST be an object. |
-| logger `is_optional` | bool | `false` | If `true`, an unregistered logger type is ignored. Other configuration errors still make the policy invalid. |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `audit_condition` | enum | No | `"NONE"` | One of `"NONE"`, `"ON_DENY"`, `"ON_ALLOW"`, `"ON_DENY_AND_ALLOW"`. Any other value is invalid. |
+| `audit_loggers` | list of object | No | `[]` | Ordered list of audit loggers to invoke when `audit_condition` is met. |
+| `audit_loggers[].name` | string | Yes | — | Registered logger type name. |
+| `audit_loggers[].config` | object | No | `{}` | Configuration for that logger type; MUST be a JSON object. |
+| `audit_loggers[].is_optional` | bool | No | `false` | If `true`, an unregistered logger type is ignored. Other configuration errors still make the policy invalid. |
 
-Unknown fields are invalid. An unregistered logger type with `is_optional`
-false, or a `config` the logger rejects, makes the policy invalid.
+Unknown fields are invalid, except inside `config`, whose contents the
+logger validates. An unregistered logger type with `is_optional` false, or
+a `config` the logger rejects, makes the policy invalid.
 
 The single policy-level condition maps onto the two engines. Each RPC is
 logged at most once:
@@ -395,31 +411,35 @@ If two factories are registered under the same name, the last one wins.
 
 ### 3.6 Built-in `stdout_logger`
 
-gRPC provides a built-in logger type named `stdout_logger`. It accepts an empty
-configuration (`{}`) and defines no fields. In xDS, it is selected with the
-typed config `envoy.extensions.rbac.audit_loggers.stream.v3.StdoutAuditLog`.
+gRPC provides a built-in logger type named `stdout_logger`. It defines no
+configuration fields, and it ignores any fields in its `config`. In xDS, it
+is selected with the typed config
+`envoy.extensions.rbac.audit_loggers.stream.v3.StdoutAuditLog`.
 
 Each event is written to standard output as one line of JSON:
 
 ```json
-{"grpc_audit_log":{"timestamp":"2006-01-02T15:04:05.999999999Z07:00","rpc_method":"/pkg.Service/Foo","principal":"spiffe://foo/user1","policy_name":"example_policy","matched_rule":"admin_access","authorized":true}}
+{"grpc_audit_log":{"timestamp":"2023-05-09T01:40:06.798505167Z","rpc_method":"/pkg.Service/Foo","principal":"spiffe://foo/user1","policy_name":"example_policy","matched_rule":"admin_access","authorized":true}}
 ```
 
-| JSON field | Value |
-|------------|-------|
-| `timestamp` | When the logger was invoked, in RFC 3339 format with nanosecond precision |
-| `rpc_method` | Audit context RPC method |
-| `principal` | Audit context principal |
-| `policy_name` | Audit context policy name |
-| `matched_rule` | Audit context matched rule |
-| `authorized` | JSON boolean |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `grpc_audit_log` | object | Yes | — | Wrapper object for the audit log event. |
+| `grpc_audit_log.timestamp` | string | Yes | — | Timestamp when the logger was invoked, in RFC 3339 format with nanosecond precision. |
+| `grpc_audit_log.rpc_method` | string | Yes | — | Audit context RPC method. |
+| `grpc_audit_log.principal` | string | Yes | — | Audit context principal. |
+| `grpc_audit_log.policy_name` | string | Yes | — | Audit context policy name. |
+| `grpc_audit_log.matched_rule` | string | Yes | — | Audit context matched rule (`""` when no rule matched). |
+| `grpc_audit_log.authorized` | bool | Yes | — | Whether the RPC was allowed. |
 
 Policy-language example:
 
 ```json
-"audit_logging_options": {
-  "audit_condition": "ON_DENY",
-  "audit_loggers": [ { "name": "stdout_logger" } ]
+{
+  "audit_logging_options": {
+    "audit_condition": "ON_DENY",
+    "audit_loggers": [ { "name": "stdout_logger" } ]
+  }
 }
 ```
 

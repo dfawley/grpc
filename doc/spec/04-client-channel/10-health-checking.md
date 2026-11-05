@@ -5,7 +5,7 @@
 
 # 4.10 Client-Side Health Checking
 
-<!-- Sources: A17, A61, doc/health-checking.md, grpc/service_config/service_config.proto (HealthCheckConfig) -->
+<!-- Sources: A17, A61, doc/health-checking.md -->
 
 > **Introduced by:** [gRFC A17: Client-Side Health Checking](https://github.com/grpc/proposal/blob/master/A17-client-side-health-checking.md)
 
@@ -18,19 +18,22 @@ service is specified in [Health Service](../07-services/01-health.md).
 ## 1. Configuration
 
 Health checking is disabled by default. Service owners enable it with the
-`healthCheckConfig` field of the [service config](04-service-config.md):
+`healthCheckConfig` field of the [service config](04-service-config.md#55-healthcheckconfig):
 
 ```json
-{ "healthCheckConfig": { "serviceName": "foo" } }
+{
+  "healthCheckConfig": {
+    "serviceName": "foo"
+  }
+}
 ```
 
-| Field (JSON) | Type | Description |
-| --- | --- | --- |
-| `healthCheckConfig.serviceName` | string (`google.protobuf.StringValue`) | The service name to send in health-check requests. If unset, health checking is disabled. The empty string is valid, and means the overall health of the server. |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `healthCheckConfig.serviceName` | string | No | — | The service name to send in health-check requests. If unset, health checking is disabled. The empty string `""` is valid and checks the overall health of the server. |
 
-Proto: `ServiceConfig.HealthCheckConfig` in
-`grpc/service_config/service_config.proto`. If `serviceName` is present
-but not a JSON string, the service config is invalid.
+If `serviceName` is present but not a JSON string, the service config is
+invalid.
 
 The client channel API provides an option that disables health checking
 for a channel, even if the service config enables it (see
@@ -80,7 +83,11 @@ health watcher, while health checking is enabled:
 2. **Initial state.** Until the first response arrives, the health state
    is CONNECTING. The subchannel is not reported healthy until the
    backend says so. This prevents a burst of queued calls from going to a
-   backend that is about to report itself unhealthy.
+   backend that is about to report itself unhealthy. Exception: when a
+   config update enables health checking, or changes the service name, on
+   a subchannel whose health state is READY, it is implementation-defined
+   whether the health state becomes CONNECTING or stays READY until the
+   new call gets its first response or fails.
 3. **Responses.** Each `HealthCheckResponse` sets the health state:
 
    | `status` in response | Health state |
@@ -106,7 +113,8 @@ health watcher, while health checking is enabled:
    connection closes, when the last health watcher is removed, when health
    checking is disabled by a config update, or when the subchannel shuts
    down. If the service name changes, the call is cancelled and restarted
-   with the new name.
+   with the new name; the health state until the restarted call's first
+   response is as described in step 2.
 
 When health checking is disabled, or no watcher is registered, the health
 state equals the raw connectivity state.

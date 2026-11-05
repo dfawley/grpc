@@ -55,8 +55,9 @@ These conventions apply to every resource type that gRPC consumes.
 Many xDS fields are extension points of type `google.protobuf.Any` (for
 example `HttpFilter.typed_config`, `Cluster.transport_socket.typed_config`,
 `TypedExtensionConfig.typed_config`, `typed_filter_metadata` values, and
-`typed_per_filter_config` values). gRPC extracts an extension from an `Any` as
-follows:
+`typed_per_filter_config` values). Except for `typed_filter_metadata` values,
+which are looked up directly by type name ([Metadata: Parsing](#91-parsing)),
+gRPC extracts an extension from an `Any` as follows:
 
 1. If the `Any` field is required and absent, the resource is rejected.
 2. **Type name.** The `type_url` MUST be non-empty and MUST contain a `/`
@@ -83,8 +84,6 @@ rejected. For example, the `HttpConnectionManager`, `UpstreamTlsContext`, and
 the metadata types below accept only the serialized protobuf form, while
 custom LB policies are configured only through `TypedStruct` (see
 [xDS LB Policies](../06-lb-policies.md)).
-
-<!-- REVIEW(divergence) [XDS_COMMON-1]: type_url prefix. C++ ExtractXdsExtension takes the part after the last "/" and ignores the prefix, as step 2 says (though its aggregate cluster_type check only strips "type.googleapis.com/"). Java and Go compare the full type_url string, including "type.googleapis.com/", for most extension points (Go: IsHTTPConnManagerResource, httpfilter.Get, the metadata registry, the UpstreamTlsContext check; Java: FilterRegistry, TYPE_URL_* constants), so any other prefix makes the type unknown (rejected, or ignored where unknown types are ignored). Envoy also ignores the prefix. Spec says: prefix not checked (C++, Envoy). -->
 
 ## 3. `ConfigSource`
 
@@ -172,6 +171,10 @@ the following MUST be set; if none is set, the resource is rejected.
 | `contains` | the value contains the string as a substring |
 | `safe_regex` | the value fully matches `safe_regex.regex` |
 
+The `prefix`, `suffix`, and `contains` strings and `safe_regex.regex` MUST be
+non-empty; if the selected one is the empty string, the resource is rejected.
+An empty `exact` is valid and matches only the empty string.
+
 - **`ignore_case`**: if true, `exact`, `prefix`, `suffix`, and `contains`
   compare case-insensitively (ASCII case folding). `ignore_case` has no effect
   on `safe_regex`.
@@ -208,8 +211,10 @@ different header semantics, which are given in
 
 Exactly one of the match specifiers (`string_match`, the legacy fields,
 `range_match`, `present_match`) MUST be set. If none is set, the resource is
-rejected. The legacy fields are always case-sensitive. They are deprecated in
-the xDS API, but gRPC MUST continue to support them.
+rejected. The non-empty rules of [`StringMatcher`](#7-stringmatcher) also apply
+to `prefix_match`, `suffix_match`, `contains_match`, and
+`safe_regex_match.regex`. The legacy fields are always case-sensitive. They are
+deprecated in the xDS API, but gRPC MUST continue to support them.
 
 ### 8.2 Evaluation
 
@@ -285,11 +290,11 @@ absent `Metadata` message parses to an empty map.
 parse_metadata(metadata):
   parsed = {}
   for key, any in metadata.typed_filter_metadata:
-    ext = extract_extension(any)        // see "Extensions"; failure rejects the resource
-    parser = metadata_registry.find(ext.type_name)
+    type_name = part of any.type_url after the last "/"
+    parser = metadata_registry.find(type_name)
     if parser is null:
-      continue                          // unknown type: ignored
-    value = parser.parse(ext)
+      continue                          // unknown type: ignored, not validated
+    value = parser.parse(any.value)     // serialized protobuf
     if value is error:
       reject resource
     parsed[key] = value
@@ -302,7 +307,10 @@ parse_metadata(metadata):
 For a given key, the value comes from exactly one of the two maps.
 `typed_filter_metadata` takes precedence. The `filter_metadata` entry is used
 only when the key is absent from `typed_filter_metadata` or its value has a
-type that is not in the registry.
+type that is not in the registry. Values are not passed through the extension
+extraction steps in [Extensions: `google.protobuf.Any` and `TypedStruct`](#2-extensions-googleprotobufany-and-typedstruct):
+an entry whose type is not in the registry is ignored without any validation,
+and a `TypedStruct` is not unwrapped.
 
 ### 9.2 Metadata Type Registry
 
@@ -316,7 +324,8 @@ supported types. The following types MUST be supported:
 | `envoy.config.core.v3.Address` | `socket_address` MUST be set. Inside it, `address` MUST be an IPv4 or IPv6 literal and `port_value` MUST be set ([Addresses](#6-addresses)). | The socket address (IP and port). |
 
 The registered parsers accept only the serialized protobuf form of the `Any`.
-A `TypedStruct` whose inner type is a registered type is rejected.
+A `TypedStruct` is not unwrapped, so a `TypedStruct` wrapping a registered type
+is treated as an unregistered type and ignored.
 
 ### 9.3 Lookups
 
@@ -326,7 +335,7 @@ otherwise:
 
 | Key | Expected type | Used for | Defined in |
 | --- | --- | --- | --- |
-| the `HttpFilter.name` of a GCP authentication filter instance | `Audience` | Audience for the identity token. A value of the wrong type fails RPCs. | [xDS HTTP Filters](../07-http-filters.md) |
+| the `HttpFilter.name` of a GCP authentication filter instance | `Audience` | Audience for the identity token. A value of the wrong type fails RPCs. | [GCP Authentication Filter](../../10-vendor-specific/04-gcp-authentication-filter.md) |
 | `envoy.lb` | `google.protobuf.Struct` | String field `hash_key`: endpoint hash key for ring_hash | [ClusterLoadAssignment](05-endpoint.md) |
 | `envoy.http11_proxy_transport_socket.proxy_address` | `Address` | HTTP CONNECT proxy for the endpoint | [ClusterLoadAssignment](05-endpoint.md), [Cluster](04-cluster.md) |
 

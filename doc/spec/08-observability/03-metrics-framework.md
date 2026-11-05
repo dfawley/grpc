@@ -5,14 +5,14 @@
 
 # 8.3 Metrics Framework and OpenTelemetry Plugin
 
-<!-- Sources: A79, A66, A72, A78, A94, A96, A108 -->
+<!-- Sources: A79, A66, A72, A78, A80, A91, A94, A96, A108 -->
 
 > **Introduced by:** [gRFC A79: Non-per-call Metrics Architecture](https://github.com/grpc/proposal/blob/master/A79-non-per-call-metrics-architecture.md)
 
 This section specifies how metrics are defined, registered, recorded, scoped,
 and exported. Per-call metrics are driven by the call tracers in
 [Instrumentation Architecture](02-instrumentation.md). Non-per-call metrics, such as LB policy, XdsClient,
-subchannel, and TLS metrics, are recorded directly by gRPC components through
+subchannel, TLS, and TCP metrics, are recorded directly by gRPC components through
 the framework below. The complete list of metrics is in [Metric Catalog](04-metrics.md).
 
 ## 1. Goals
@@ -144,10 +144,12 @@ helper or creation arguments (see
 Gauges whose value is sampled rather than event-driven use **callbacks**:
 
 - A component registers a callback with the stats plugin group, together with
-  the list of gauge handles that the callback reports and a **minimum
-  interval**. The default minimum interval is **5 seconds**.
-- Each plugin invokes the callback when it collects metrics, but no more often
-  than the minimum interval. The callback reports
+  the list of gauge handles that the callback reports. The component MAY also
+  give a **minimum interval**; where the registration API supports one, the
+  default is **5 seconds**.
+- Each plugin invokes the callback when it collects metrics. A plugin that
+  supports minimum intervals MUST NOT invoke the callback more often than its
+  minimum interval. The callback reports
   `(handle, value, label_values[], optional_label_values[])` tuples through a
   reporter object.
 - Several callbacks MAY report the same gauge, provided no two of them report
@@ -155,8 +157,6 @@ Gauges whose value is sampled rather than event-driven use **callbacks**:
 - Registration returns a handle that controls the callback's lifetime.
   Releasing the handle unregisters the callback. The handle MUST NOT outlive
   the stats plugin group that issued it.
-
-<!-- REVIEW(divergence) [METRICS-7]: Only C++ has a per-callback minimum interval (RegisterCallback(..., min_interval = 5s); the OTel plugin skips callbacks invoked sooner). Java's registerBatchCallback(callback, instruments...) and Go's RegisterAsyncReporter(reporter, metrics...) take no interval; plugins invoke callbacks on every collection. Spec says: a component registers a callback with a minimum interval, default 5 seconds, and each plugin invokes it no more often than that. -->
 
 ## 5. Naming Conventions
 
@@ -203,7 +203,7 @@ Units follow the OpenTelemetry/UCUM conventions:
 | --- | --- |
 | Latency and durations | `s` (seconds, recorded as double) |
 | Sizes | `By` (bytes) |
-| Counts | Annotated dimensionless units in braces, naming the counted thing: `{call}`, `{attempt}`, `{retry}`, `{hedge}`, `{transparent_retry}`, `{update}`, `{endpoint}`, `{weight}`, `{resource}`, `{failure}`, `{disconnection}`, `{connection}`, `{handshake}`, `{bool}`, `{packet}`, `{syscall}` |
+| Counts | Annotated dimensionless units in braces, naming the counted thing: `{call}`, `{attempt}`, `{retry}`, `{hedge}`, `{transparent_retry}`, `{update}`, `{endpoint}`, `{entry}`, `{pick}`, `{ejection}`, `{weight}`, `{resource}`, `{failure}`, `{disconnection}`, `{connection}`, `{handshake}`, `{bool}`, `{packet}`, `{syscall}` |
 | Throughput | `By/s` (bytes per second) |
 
 ## 8. Default Histogram Buckets

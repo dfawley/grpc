@@ -5,7 +5,7 @@
 
 # `weighted_target` LB Policy
 
-<!-- Sources: A28 (weighted target LB policy), A56 (hierarchical addresses), A78 (locality attribute), grpc/service_config/service_config.proto (WeightedTargetLoadBalancingPolicyConfig) -->
+<!-- Sources: A28 (weighted target LB policy), A56 (hierarchical addresses), A78 (locality attribute) -->
 
 > **Experimental:** The policy is registered as
 > `weighted_target_experimental`. Its name and configuration are not yet
@@ -16,7 +16,7 @@
 ## 1. Overview
 
 `weighted_target` is a parent policy (see
-[Policy Hierarchy](../06-load-balancing.md#9-policy-hierarchy)) with named,
+[Load Balancing: Policy Hierarchy](../06-load-balancing.md#9-policy-hierarchy)) with named,
 weighted children. It spreads calls randomly across its READY children in
 proportion to their weights. xDS uses it to pick a locality within a
 priority (see [xDS LB Policies](../../09-xds/06-lb-policies.md)), but it is
@@ -27,9 +27,6 @@ that are not READY.
 Registered name: `weighted_target_experimental`.
 
 ## 2. Configuration
-
-Proto: `WeightedTargetLoadBalancingPolicyConfig` in
-`grpc/service_config/service_config.proto`.
 
 ```json
 {
@@ -44,20 +41,20 @@ Proto: `WeightedTargetLoadBalancingPolicyConfig` in
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `targets` | map of string → object | No | empty map | The children. The map key is the child's name, which is its identity across updates. |
+| `targets` | map of string → object | No | `{}` | The children. The map key is the child's name, which is its identity across updates. |
 | `targets{}.weight` | uint32 | Yes | — | The child's weight. MUST be greater than 0. |
-| `targets{}.childPolicy` | `LoadBalancingConfig list` | Yes | — | The child's policy. Resolved as specified in [LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration). |
+| `targets{}.childPolicy` | LoadBalancingConfig list | Yes | — | The child's policy. Resolved as specified in [Load Balancing: LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration). |
 
 ### 2.1 Other Inputs
 
 | Input | Location | Default | Used for |
 | --- | --- | --- | --- |
-| Hierarchical path | Endpoint attribute hierarchical path, set by the parent that routes endpoints to named children (with xDS, by `cds`, with the first element removed by `priority`) | — | The first element names the target whose child receives the endpoint, and is removed before the endpoint is passed down ([Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths); [Update](#33-updates-from-the-parent)). |
+| Hierarchical path | Endpoint attribute hierarchical path, set by the parent that routes endpoints to named children (with xDS, by `cds`, with the first element removed by `priority`) | — | The first element names the target whose child receives the endpoint, and is removed before the endpoint is passed down ([Load Balancing: Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths); [Updates from the Parent](#33-updates-from-the-parent)). |
 
 ### 2.2 Validation
 
 The config is invalid, and is rejected as specified in
-[LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration),
+[Load Balancing: LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration),
 if any of the following holds:
 
 - A target's `weight` is missing or zero.
@@ -69,12 +66,12 @@ Other inputs ([Other Inputs](#21-other-inputs)) are validated as follows:
 
 - **Hierarchical path:** an endpoint whose path is empty, or whose first
   element is not a key of `targets`, is ignored (see
-  [Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths)).
+  [Load Balancing: Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths)).
 
 ## 3. LB Policy Implementation
 
 The policy implements the generic
-[LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
+[Load Balancing: LB Policy API](../06-load-balancing.md#4-lb-policy-api) as follows.
 
 ### 3.1 Internal State
 
@@ -94,7 +91,7 @@ On each update, the policy:
 
 1. Splits the endpoints by hierarchical path (the first path element is
    the target name, removed before passing down; see
-   [Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths)).
+   [Load Balancing: Hierarchical Address Paths](../06-load-balancing.md#94-hierarchical-address-paths)).
 2. For each target in the config, creates the child if needed, or
    updates the existing child of that name, passing it the update
    described in [Child Policies](#51-child-policies). If a child's policy
@@ -137,8 +134,10 @@ chosen child's picker. In CONNECTING and IDLE, it queues:
 | --- | --- | --- |
 | READY | READY children | Weighted random choice, delegated to the child's picker. |
 | CONNECTING | — | Queue. |
-| IDLE | — | Queue. The picker MUST also schedule a call to the policy's `ExitIdle()`, which is forwarded to all children (see [Triggering Work From a Picker](../06-load-balancing.md#63-triggering-work-from-a-picker)), so that IDLE children are not left idle with RPCs queued. |
+| IDLE | — | Queue. The picker MUST also schedule a call to the policy's `ExitIdle()`, which is forwarded to all children (see [Load Balancing: Triggering Work From a Picker](../06-load-balancing.md#63-triggering-work-from-a-picker)), so that IDLE children are not left idle with RPCs queued. |
 | TRANSIENT_FAILURE | TRANSIENT_FAILURE children | Weighted random choice, delegated, so that the call fails with a child's error. If there are no children, fail with `UNAVAILABLE` and a message saying that there are no children. |
+
+<!-- REVIEW(judgment) [RING_HASH-21]: Same question as [`ring_hash` LB Policy: ExitIdle](ring_hash.md#34-exitidle): when `weighted_target` wraps `ring_hash` children that are all IDLE, queuing in `weighted_target`'s IDLE picker and calling `ExitIdle()` does not wake `ring_hash`, whose `ExitIdle()` is a no-op. -->
 
 ```
 NewPicker(children):                      # children in the aggregate state
@@ -159,7 +158,7 @@ Pick(args):
 
 The policy has one child per entry in `targets`, named by the target
 name. Each child's update contains the child's config (`childPolicy`),
-its endpoints (routed by hierarchical path; see [Update](#33-updates-from-the-parent)),
+its endpoints (routed by hierarchical path; see [Updates from the Parent](#33-updates-from-the-parent)),
 the resolution note, and the top-level attributes plus a
 **locality-name attribute** set to the target name. Policies below can
 use this attribute, for example as the `grpc.lb.locality` label in
@@ -187,8 +186,6 @@ The policy handles calls from its children through the
 - `RequestReresolution()`: Forwarded to the policy's own helper.
 - `CreateSubchannel(address, attributes)`: Passed through to the policy's
   own helper unchanged.
-
-<!-- REVIEW(divergence) [WEIGHTED_TARGET-2]: Two of three implementations aggregate child states with a sticky-TRANSIENT_FAILURE rule instead of the normal rules. C++ keeps a child counted as TRANSIENT_FAILURE until it reports READY (and immediately calls ExitIdle on any child that reports IDLE). Go ignores only TRANSIENT_FAILURE -> CONNECTING transitions (TRANSIENT_FAILURE -> IDLE is recorded). Java uses the plain normal rules. With a retrying child, C++/Go can report TRANSIENT_FAILURE (failing RPCs with a child's error) where Java reports CONNECTING (queueing). Spec says: the aggregate is computed over all children with the normal rules (first match wins). -->
 
 ### 5.3 Subchannels
 

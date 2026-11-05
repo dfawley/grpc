@@ -5,7 +5,7 @@
 
 # 7.4 Admin Interface
 
-<!-- Sources: A38 -->
+<!-- Sources: A14, A38, A40 -->
 
 > **Introduced by:** [gRFC A38: Admin Interface API](https://github.com/grpc/proposal/blob/master/A38-admin-interface-api.md)
 
@@ -21,7 +21,7 @@ changes.
 
 | Service | Proto | Included when | Specified in |
 | --- | --- | --- | --- |
-| Channelz (`grpc.channelz.v1.Channelz`) | `grpc/channelz/v1/channelz.proto` | Always | [Channelz](../08-observability/06-channelz.md) |
+| Channelz (`grpc.channelz.v1.Channelz`) | [`grpc/channelz/v1/channelz.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/channelz/v1/channelz.proto) | Always | [Channelz](../08-observability/06-channelz.md) |
 | Client Status Discovery Service (`envoy.service.status.v3.ClientStatusDiscoveryService`) | `envoy/service/status/v3/csds.proto` | When gRPC's xDS support is part of the application | [CSDS](../09-xds/11-csds.md) |
 
 The set MAY grow. Services added to it later are added automatically to
@@ -57,8 +57,11 @@ support into an application.
    currently relevant admin services ([Admin Services](#1-admin-services)) to an
    application-provided server, or to the server's builder or configuration
    before start. The function MAY instead return the set of admin service
-   implementations, which the application then registers.
+   implementations, which the application then registers, and MAY return a
+   cleanup callback for releasing resources owned by the registered admin
+   services when the server stops.
 2. The function MUST work on any server the application can build, including
-   xDS-enabled servers ([xDS-Enabled Servers](../09-xds/08-server.md)).
+   xDS-enabled servers ([xDS-Enabled Servers](../09-xds/08-server.md)), and
+   MUST add every currently relevant admin service to it.
 3. Each admin service MUST also be available individually, so that an
    application can register a chosen subset.

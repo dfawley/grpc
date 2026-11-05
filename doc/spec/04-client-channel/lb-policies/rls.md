@@ -5,7 +5,7 @@
 
 # `rls` LB Policy
 
-<!-- Sources: grpc-proto grpc/lookup/v1/rls.proto, grpc/lookup/v1/rls_config.proto, grpc/service_config/service_config.proto (RlsLoadBalancingPolicyConfig), A74 (dynamic cluster subscriptions), A108 (custom per-call label), implementations (no gRFC defines RLS) -->
+<!-- Sources: grpc-proto grpc/lookup/v1/rls.proto, A74 (dynamic cluster subscriptions), A108 (custom per-call label), implementations (no gRFC defines RLS) -->
 
 > **Experimental:** The policy is registered as `rls_experimental`. Its
 > name, configuration, and metrics are not yet stable.
@@ -44,11 +44,6 @@ Registered name: `rls_experimental`.
 
 ## 2. Configuration
 
-Proto: `RlsLoadBalancingPolicyConfig` in
-`grpc/service_config/service_config.proto`. The `routeLookupConfig` field
-is a `RouteLookupConfig` from `grpc/lookup/v1/rls_config.proto`, in its
-proto3 JSON form.
-
 ```json
 {
   "rls_experimental": {
@@ -73,7 +68,7 @@ proto3 JSON form.
       "defaultTarget": "default-target"
     },
     "routeLookupChannelServiceConfig": { "loadBalancingConfig": [ { "round_robin": {} } ] },
-    "childPolicy": [ { "cds_experimental": { "isDynamic": true } } ],
+    "childPolicy": [ { "child_policy_name": {} } ],
     "childPolicyConfigTargetFieldName": "cluster"
   }
 }
@@ -81,30 +76,30 @@ proto3 JSON form.
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `routeLookupConfig` | object | Yes | — | The route lookup config (`RouteLookupConfig`). |
-| `routeLookupConfig.grpcKeybuilders` | list of object | Yes | — | MUST be non-empty. Each `GrpcKeyBuilder` says how to build the request key for a set of methods ([Key Building](#key-building)). |
+| `routeLookupConfig` | object | Yes | — | The route lookup configuration. |
+| `routeLookupConfig.grpcKeybuilders` | list of object | Yes | — | MUST be non-empty. Each key builder specifies how to build the request key for a set of methods ([Key Building](#key-building)). |
 | `routeLookupConfig.grpcKeybuilders[].names` | list of object | Yes | — | MUST be non-empty. The methods this key builder applies to. |
 | `routeLookupConfig.grpcKeybuilders[].names[].service` | string | Yes | — | MUST be non-empty. The fully-qualified service name, including the package. |
 | `routeLookupConfig.grpcKeybuilders[].names[].method` | string | No | `""` | The method name. Empty means every method of the service. |
-| `routeLookupConfig.grpcKeybuilders[].headers` | list of object | No | empty list | List of `NameMatcher`, each producing one key from request headers. |
+| `routeLookupConfig.grpcKeybuilders[].headers` | list of object | No | `[]` | Header matchers, each producing one key from request headers. |
 | `routeLookupConfig.grpcKeybuilders[].headers[].key` | string | Yes | — | MUST be non-empty. The key name. |
-| `routeLookupConfig.grpcKeybuilders[].headers[].names` | list of string | No | empty list | An ordered list of header names. A `NameMatcher` with an empty `names` list never produces a value. A name ending in `-bin` makes the config invalid. |
+| `routeLookupConfig.grpcKeybuilders[].headers[].names` | list of string | No | `[]` | Ordered list of header names. An entry with an empty `names` list never produces a value. A name ending in `-bin` makes the config invalid. |
 | `routeLookupConfig.grpcKeybuilders[].headers[].requiredMatch` | bool | No | `false` | MUST NOT be true for gRPC; if true, the config is invalid. |
 | `routeLookupConfig.grpcKeybuilders[].extraKeys` | object | No | — | Key names under which the RPC's host, service, and method are added. |
 | `routeLookupConfig.grpcKeybuilders[].extraKeys.host` | string | No | `""` | Key name for the RPC's host. An empty or absent key name means that value is not added. |
 | `routeLookupConfig.grpcKeybuilders[].extraKeys.service` | string | No | `""` | Key name for the RPC's service. An empty or absent key name means that value is not added. |
 | `routeLookupConfig.grpcKeybuilders[].extraKeys.method` | string | No | `""` | Key name for the RPC's method. An empty or absent key name means that value is not added. |
-| `routeLookupConfig.grpcKeybuilders[].constantKeys` | map of string → string | No | empty map | Map of key to value, added to every key built by this builder. A key MUST be non-empty. |
+| `routeLookupConfig.grpcKeybuilders[].constantKeys` | map of string → string | No | `{}` | Map of key to value, added to every key built by this builder. A key MUST be non-empty. |
 | `routeLookupConfig.httpKeybuilders` | list of object | No | — | Ignored. |
 | `routeLookupConfig.lookupService` | string | Yes | — | MUST be non-empty, and MUST be a valid target URI for a gRPC channel whose scheme has a registered resolver ([Name Resolution](../03-name-resolution.md)). The target of the control channel ([Control Channel](#control-channel)). |
-| `routeLookupConfig.lookupServiceTimeout` | `Duration` | No | `10s` | Deadline of each `RouteLookup` RPC. Zero or unset means the default. A negative value makes the config invalid. |
-| `routeLookupConfig.maxAge` | `Duration` | No | 5 minutes | How long a successful response stays usable. Zero or unset means the default. If `staleAge` is not set, values above 5 minutes are clamped to 5 minutes. If `staleAge` is set, `maxAge` is not clamped. A negative value makes the config invalid. |
-| `routeLookupConfig.staleAge` | `Duration` | No | 5 minutes | Age after which a still-valid response is refreshed in the background. Values above 5 minutes are clamped to 5 minutes. After clamping, if `staleAge` is greater than `maxAge`, `staleAge` is set to `maxAge`. A negative value makes the config invalid. |
+| `routeLookupConfig.lookupServiceTimeout` | Duration | No | `"10s"` | Deadline of each `RouteLookup` RPC. Zero or unset means the default. A negative value makes the config invalid. |
+| `routeLookupConfig.maxAge` | Duration | No | `"300s"` | How long a successful response stays usable. Zero or unset means the default. If `staleAge` is not set, values above 5 minutes are clamped to 5 minutes. If `staleAge` is set, `maxAge` is not clamped. A negative value makes the config invalid. |
+| `routeLookupConfig.staleAge` | Duration | No | `"300s"` | Age after which a still-valid response is refreshed in the background. Values above 5 minutes are clamped to 5 minutes. After clamping, if `staleAge` is greater than `maxAge`, `staleAge` is set to `maxAge`. A negative value makes the config invalid. |
 | `routeLookupConfig.cacheSizeBytes` | int64 | Yes | — | MUST be greater than 0; otherwise the config is invalid. Values above 5,242,880 (5 MiB) are clamped to 5,242,880. The cache's size limit ([Cache](#cache)). |
 | `routeLookupConfig.validTargets` | list of string | No | — | Ignored. |
-| `routeLookupConfig.defaultTarget` | string | No | `""` (no default target) | An empty value means no default target. The target used when a lookup fails or is throttled ([Picker Implementation](#4-picker-implementation)). |
-| `routeLookupChannelServiceConfig` | object | No | — | If present, it MUST be a valid service config (`ServiceConfig`, in JSON form); otherwise the RLS config is invalid. It is the service config of the control channel ([Control Channel](#control-channel)). |
-| `childPolicy` | `LoadBalancingConfig list` | Yes | — | The child policy for each target. Validated as described in [Validation](#22-validation). |
+| `routeLookupConfig.defaultTarget` | string | No | `""` | An empty value means no default target. The target used when a lookup fails or is throttled ([Picker Implementation](#4-picker-implementation)). |
+| `routeLookupChannelServiceConfig` | object | No | — | If present, MUST be a valid [service config](../04-service-config.md); otherwise the RLS config is invalid. Service config of the control channel ([Control Channel](#control-channel)). |
+| `childPolicy` | LoadBalancingConfig list | Yes | — | The child policy for each target. Validated as described in [Validation](#22-validation). |
 | `childPolicyConfigTargetFieldName` | string | Yes | — | MUST be non-empty. The name of the field in the child's config that receives the target name ([Child Policies](#51-child-policies)). |
 
 Unknown fields are ignored at every level.
@@ -217,7 +212,7 @@ The control channel is created on the first config. When an update changes
 `lookupService`, a new control channel is created for new lookups. Lookups
 already in flight MAY finish on the old channel. The cache is kept.
 
-<!-- REVIEW(spec) [RLS-12]: A change to routeLookupChannelServiceConfig alone. No language applies it: C++ creates a new RlsChannel only when lookup_service changes; Go only when lookupService or lookupServiceTimeout changes (handleControlChannelUpdate); Java ignores it (TODO). The control channel keeps the old service config until lookupService changes. The spec does not say what happens, yet the Go bug "RLS config and picker non-conformances" lists this as a non-conformance. Spec says: unspecified (only a lookupService change creates a new control channel). -->
+<!-- REVIEW(judgment) [RLS-12]: A change to routeLookupChannelServiceConfig alone. No language applies it: C++ creates a new RlsChannel only when lookup_service changes; Go only when lookupService or lookupServiceTimeout changes (handleControlChannelUpdate); Java ignores it (TODO). The control channel keeps the old service config until lookupService changes. The spec does not say what happens, yet the Go bug "RLS config and picker non-conformances" lists this as a non-conformance. Spec says: unspecified (only a lookupService change creates a new control channel). -->
 
 **Backoff reset on reconnect.** The policy watches the control channel's
 connectivity state. When the channel becomes READY after having been in
@@ -230,7 +225,8 @@ are therefore retried as soon as it is reachable again.
 ##### `RouteLookup` RPC
 
 Method: `/grpc.lookup.v1.RouteLookupService/RouteLookup`, unary
-(`grpc/lookup/v1/rls.proto`), with deadline `now + lookupServiceTimeout`.
+([`grpc/lookup/v1/rls.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/lookup/v1/rls.proto)),
+with deadline `now + lookupServiceTimeout`.
 
 `RouteLookupRequest`:
 
@@ -289,7 +285,7 @@ created if needed and becomes most recently used.
   use valid stale data.
 
 **Size and eviction.** Each entry has an estimated size in bytes, computed
-from the key and the entry's data; the exact estimate is
+from the key, the entry's data, or both; the exact estimate is
 implementation-defined. When the total size exceeds `cacheSizeBytes`
 (after an entry is added, or after `cacheSizeBytes` decreases), entries
 are evicted in least-recently-used order until the total fits. An entry
@@ -405,7 +401,9 @@ Forwarded to every child.
 Resets the control channel's connection backoff, takes every cache entry
 out of backoff (clearing its backoff time, cancelling its backoff timer,
 and resetting its backoff state), forwards the call to every child, and
-reports a new picker.
+reports a new picker. Whether the channel's reset reaches the policy is
+implementation-defined
+([Load Balancing: LB Policy API](../06-load-balancing.md#4-lb-policy-api)).
 
 ### 3.6 Shutdown
 

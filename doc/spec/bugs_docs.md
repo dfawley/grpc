@@ -1,6 +1,6 @@
 # Documentation bugs
 
-Errors and stale text in gRFCs (grpc-proposal), `grpc/doc`, and grpc-proto found while writing and reviewing the gRPC spec in this directory, where the spec is believed correct: **62** entries, ordered by severity. Other lists: [Go](bugs_go.md), [Java](bugs_java.md), [C++](bugs_cpp.md).
+Errors and stale text in gRFCs (grpc-proposal), `grpc/doc`, `grpc.io`, and grpc-proto found while writing and reviewing the gRPC spec in this directory, where the spec is believed correct: **85** entries, ordered by severity. Other lists: [Go](bugs_go.md), [Java](bugs_java.md), [C++](bugs_cpp.md).
 
 Severity:
 
@@ -26,6 +26,30 @@ Each bug lists the review item that identified it (an item ID such as `RLS-4`, a
 - **Description:** A29 says: "If any of the following fields are present, gRPC will NACK an LDS update as part of validating all LDS updates:" and then, for `require_sni`: "when this is set to `true`, it requires the server to \"reject connections without a valid and matching SNI\" … Silently ignoring the `true` value will result into gRPC not rejecting connections … hence gRPC will NACK such an LDS update." The lead-in sentence ("present") and the rationale (`true`) disagree. An explicit `false` asks for nothing gRPC lacks, so rejecting it is wrong, and it breaks control planes that always fill in the field. Java follows the literal reading and NACKs an explicit `false` (`XdsListenerResource`); C++ and Go NACK only `true`, which the spec requires. Suggested correction: "If any of the following fields are set to an unsupported value, gRPC will NACK…", and for `require_sni`, "gRPC will NACK an LDS update if this field is `true`."
 - **Evidence:** grpc-proposal `A29-xds-tls-security.md` (master 4125fbd), "LDS for Server Side Security" (the list that begins "If any of the following fields are present").
 - **Spec:** xDS Security: Server Side: `DownstreamTlsContext`
+
+### [medium] grpc.io `guides/retry.md` misstates retry throttling accounting and says disabling retries disables transparent retries
+
+- **Item:** audit (W1-C-013); related: R45
+- **Summary:** The grpc.io retry guide says that disabling retries on a channel also disables transparent retries, and describes retry throttling token accounting loosely enough to be wrong.
+- **Description:** `content/en/docs/guides/retry.md` says: "You can also disable retries entirely when creating a channel, which disables transparent retries and any configured retry policies." The spec (decision R45) says transparent retries SHOULD still happen when the application disables retries; C++ and Java currently disable them too, which is tracked as implementation bugs, so the guide should change once those are fixed. The throttling paragraph says: "Failed RPCs decrement the count by 1, successful RPCs increment it by `tokenRatio`. If the `token_count` falls below half of `maxTokens`, retries are paused until the count recovers." Per gRFC A6 and the spec, only failures with a retryable (or non-fatal) status code or a "do not retry" pushback decrement the count, and throttling applies while `token_count` is less than or equal to half of `maxTokens`; a throttled RPC fails with its current status instead of waiting. Suggested correction: say that disabling retries disables configured retries and hedging only, and restate the throttling rules as in A6.
+- **Evidence:** grpc.io 81fb52b: `content/en/docs/guides/retry.md` (introduction to retry policies, and the `retryThrottling` paragraph).
+- **Spec:** Retries and Hedging (`04-client-channel/12-retries.md`): Token Accounting; Transparent Retries; Limits and Disabling Retries
+
+### [medium] grpc.io `guides/deadlines.md` says the server fails an expired call with `CANCELLED`
+
+- **Item:** audit (W1-C-015)
+- **Summary:** The deadlines guide says a server deals with an expired client deadline "by automatically cancelling a call (`CANCELLED` status)". The status for an expired deadline is `DEADLINE_EXCEEDED`.
+- **Description:** `content/en/docs/guides/deadlines.md` says: "A gRPC server deals with this situation by automatically cancelling a call (`CANCELLED` status) once a deadline set by the client has passed." The spec says that when the deadline passes on the server, the server cancels the call and SHOULD send status `DEADLINE_EXCEEDED` (or abort the stream), and the client completes the call with `DEADLINE_EXCEEDED`. The server application does see the call as cancelled, but the status is not `CANCELLED`. Suggested correction: "... by automatically cancelling the call and failing it with `DEADLINE_EXCEEDED` once a deadline set by the client has passed."
+- **Evidence:** grpc.io 81fb52b: `content/en/docs/guides/deadlines.md` (section on deadlines on the server).
+- **Spec:** Core RPC Semantics (`02-rpc-semantics/README.md`): Deadlines (Communication and Enforcement)
+
+### [medium] `doc/grpc_xds_features.md` contains superseded statements contradicting gRFCs A42, A46, A65, A82, A97, and A113
+
+- **Item:** audit (W1-C-018)
+- **Summary:** The prose before the feature table in `doc/grpc_xds_features.md` states xDS limitations that later gRFCs removed.
+- **Description:** (1) "This will cause all cluster configurations to be rejected by the client because the xDS protocol currently requires rejecting all resources in a given response" is superseded by gRFC A46 (xDS NACK Semantics Improvement): valid resources in a response are accepted and only the invalid ones are NACKed. (2) "The optional `load_balancing_weight` is always ignored." is superseded: endpoint weights are used by `ring_hash` (gRFC A42) and by weighted shuffling in `pick_first` (gRFC A113). (3) "Initially, only `google_default` channel creds will be supported to authenticate with the xDS server." is stale: the bootstrap supports other channel credentials, including mTLS (gRFC A65) and system root certificates (gRFC A82), and call credentials (gRFC A97). Suggested correction: delete or update these paragraphs; the feature table already lists the gRFCs.
+- **Evidence:** grpc 515aaa1743: [doc/grpc_xds_features.md L17-L49](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/doc/grpc_xds_features.md#L17-L49).
+- **Spec:** XdsClient (`09-xds/03-xds-client.md`); Bootstrap (`09-xds/02-bootstrap.md`); xDS LB Policies (`09-xds/06-lb-policies.md`)
 
 ### [medium] doc/PROTOCOL-HTTP2.md requires the consumer to verify the grpc-status-details-bin code
 
@@ -102,11 +126,75 @@ Each bug lists the review item that identified it (an item ID such as `RLS-4`, a
 
 ### [medium] gRFC A29 selects the LDS transport socket by name
 
-- **Item:** audit (xdsfilters); related: XDS_CDS-3 (open)
+- **Item:** audit (xdsfilters); related: XDS_CDS-3 (resolved: CDS `transport_socket.name` is ignored; LDS text unchanged)
 - **Summary:** A29 says an LDS update is NACKed if a `transport_socket` *name* isn't `envoy.transport_sockets.tls`. Envoy chooses the extension by `typed_config` type and `name` is deprecated for that use.
 - **Description:** "As part of validating all LDS updates, if a `transport_socket` name is not `envoy.transport_sockets.tls` i.e. something we don't recognize, gRPC will NACK an LDS update." Java and Go follow this and NACK on the name; C++ ignores the name and uses only the `typed_config` type, and so does the spec ("its `typed_config` … MUST be `DownstreamTlsContext`; any other type → NACK"). A control plane that sets a different name, or none, gets different results in different languages. Both options considered in XDS_CDS-3 that ignore the name ((a) and the recommended (b)) need A29 changed to: "if the `transport_socket`'s `typed_config` is not a `DownstreamTlsContext`, gRPC will NACK". The same change applies to the CDS side.
 - **Evidence:** grpc-proposal `A29-xds-tls-security.md` (master 4125fbd), "LDS for Server Side Security".
 - **Spec:** xDS Security: Server Side: `DownstreamTlsContext`; xDS Security: Locating the TLS Context
+
+### [medium] `doc/PROTOCOL-HTTP2.md` "Idempotency and Retries" section predates gRFC A6
+
+- **Item:** audit (W2-02-011)
+- **Summary:** The "Idempotency and Retries" section of `doc/PROTOCOL-HTTP2.md` says "Calls that cannot be proven to have started will not be retried", which, read literally, forbids transparent retries, and it does not describe gRFC A6 retries or hedging.
+- **Description:** The section says: "Unless explicitly defined to be, gRPC Calls are not assumed to be idempotent. Specifically: Calls that cannot be proven to have started will not be retried. There is no mechanism for duplicate suppression as it is not necessary. Calls that are marked as idempotent may be sent multiple times." Under gRFC A6 and the spec, calls known not to have reached the server application are retried transparently, and the service config can configure retry and hedging policies for any method. The document also never mentions the `grpc-previous-rpc-attempts` request header or the `grpc-retry-pushback-ms` trailer. Suggested correction: replace the section with a summary of transparent retries and a pointer to gRFC A6, and add the two retry headers to the grammar.
+- **Evidence:** grpc 515aaa1743: [doc/PROTOCOL-HTTP2.md L197-L203](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/doc/PROTOCOL-HTTP2.md#L197-L203).
+- **Spec:** Core RPC Semantics (`02-rpc-semantics/README.md`): Idempotency and Retries; gRPC over HTTP/2 (`03-wire-protocol/01-http2.md`): Retry-related request headers, Retry pushback, Idempotency and Retries
+
+### [medium] grpc-proto `rls_config.proto` `NameMatcher.names` comment ("first one with a non-empty value") contradicts the RLS key-building rule
+
+- **Item:** audit (W2-09-012)
+- **Summary:** The comment on `NameMatcher.names` in `grpc/lookup/v1/rls_config.proto` says "the first one with a non-empty value is used", but the spec and C++, Go, and Java use the first header that is present, even if its value is empty.
+- **Description:** The comment reads: "Ordered list of names (headers or query parameter names) that can supply this value; the first one with a non-empty value is used." The spec's key-building pseudocode takes the first name in `names` for which the request has the header, and all three implementations check presence only (C++ `Lookup(...).has_value()`, Go `md.Get(name) != nil`, Java `value != null`). Java's `RlsProtoData.NameMatcher.names()` Javadoc copies the proto wording. Suggested correction: "the first one present in the request is used, even if its value is empty."
+- **Evidence:** grpc-proto ffb297a: [rls_config.proto L37-L39](https://github.com/grpc/grpc-proto/blob/ffb297aeea/grpc/lookup/v1/rls_config.proto#L37-L39); grpc-java ed3bf6b76b: [RlsProtoData.java L186](https://github.com/grpc/grpc-java/blob/ed3bf6b76b65fc76c1669ef70b71765844eb8a50/rls/src/main/java/io/grpc/rls/RlsProtoData.java#L186), [RlsRequestFactory.java L98-L108](https://github.com/grpc/grpc-java/blob/ed3bf6b76b65fc76c1669ef70b71765844eb8a50/rls/src/main/java/io/grpc/rls/RlsRequestFactory.java#L98-L108); grpc 515aaa1743: [rls.cc L917-L926](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/src/core/load_balancing/rls/rls.cc#L917-L926); grpc-go cbf30c4130: [builder.go L242-L248](https://github.com/grpc/grpc-go/blob/cbf30c41309983ce66c6a81abe569a75fd2b9dcd/balancer/rls/internal/keys/builder.go#L242-L248)
+- **Spec:** `rls` LB Policy (`04-client-channel/lb-policies/rls.md`): Key Building
+
+### [medium] `grpc/doc/server-reflection.md` has a dead proto URL and an obsolete service schema, and the grpc-java reflection tutorial shows `grpc_cli` working with only the `v1` service
+
+- **Item:** audit (W2-12-013)
+- **Summary:** `doc/server-reflection.md` links to `src/proto/grpc/reflection/v1/reflection.proto` in the grpc repo, which no longer exists, and embeds an obsolete pre-release `service ProtoDescriptorDatabase` schema. The grpc-java reflection tutorial registers only `ProtoReflectionServiceV1` but shows `grpc_cli ls` listing `grpc.reflection.v1alpha.ServerReflection`.
+- **Description:** The canonical protos are in grpc-proto (`grpc/reflection/v1/reflection.proto` and `v1alpha`), defining `service ServerReflection { rpc ServerReflectionInfo(...) }`; `doc/server-reflection.md` instead shows `service ProtoDescriptorDatabase { rpc DescriptorDatabaseInfo(...) }`. `grpc_cli` uses the `v1alpha` service, so against a Java server that registers only `ProtoReflectionServiceV1` it does not work, and the tutorial's sample output cannot occur (that server exports `grpc.reflection.v1.ServerReflection`). grpc-go's `reflection/README.md` and package comment also link to the removed grpc-repo proto paths. Suggested correction: link to the grpc-proto files, drop the obsolete schema, and fix the tutorial's registration or output.
+- **Evidence:** grpc 515aaa1743: [doc/server-reflection.md L26-L27](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/doc/server-reflection.md#L26-L27), [L131-L133](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/doc/server-reflection.md#L131-L133); grpc-java ed3bf6b76b: `documentation/server-reflection-tutorial.md` (server registration and `grpc_cli ls` output); grpc-go cbf30c4130: `reflection/README.md` L5, `reflection/serverreflection.go` L23.
+- **Spec:** Server Reflection (`07-services/02-reflection.md`): Service Definition; Versions
+
+### [medium] `grpc/doc/binary-logging.md` documents a superseded, unimplemented pre-A16 binary logging API
+
+- **Item:** audit (W2-14-018)
+- **Summary:** `doc/binary-logging.md` is an obsolete design sketch of a separate binary logging library with explicit per-RPC logging calls (`LogRequestHeaders`, `LogResponseHeaders`, `LogUserData`) and an `rpc_id`. gRFC A16 replaced it with built-in logging controlled by configuration, and the sketched API was never implemented.
+- **Description:** The doc says: "The binary logger will be a separate library from gRPC, in each language that we support. The user will need to explicitly call into the library to generate logs." gRFC A16 instead says: "The proposed design is adding binary logging as a built-in functionality in gRPC. ... Turning on binary logging should be a configuration setting and require no code changes." The log entry field is `call_id`, not `rpc_id`. Suggested correction: remove `doc/binary-logging.md` or replace it with a pointer to gRFC A16 and `grpc/binlog/v1/binarylog.proto`.
+- **Evidence:** grpc 515aaa1743: [doc/binary-logging.md L1-L59](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/doc/binary-logging.md#L1-L59); grpc-proposal 4125fbd: `A16-binary-logging.md` ("Proposal").
+- **Spec:** Binary Logging (`08-observability/07-binary-logging.md`): Enabling Binary Logging
+
+### [low] grpc.io `guides/opentelemetry-metrics.md` gives the wrong definition for the `grpc.xds.server` label
+
+- **Item:** audit (W1-C-014)
+- **Summary:** The OpenTelemetry metrics guide defines the `grpc.xds.server` label with the description of `grpc.target` instead of the xDS server's target URI.
+- **Description:** The label table in `content/en/docs/guides/opentelemetry-metrics.md` says `grpc.xds.server`: "For clients, indicates the target of the gRPC channel in which the XdsClient is used. For servers, will be the string \"#server\"." That is the `grpc.target` definition. Per gRFC A78 and the spec, `grpc.xds.server` is the target URI of the xDS server (the bootstrap `server_uri`). Suggested correction: replace the description with "The target URI of the xDS server."
+- **Evidence:** grpc.io 81fb52b: `content/en/docs/guides/opentelemetry-metrics.md` (attribute table).
+- **Spec:** Metric Catalog (`08-observability/04-metrics.md`): Labels; XdsClient Metrics
+
+### [low] grpc-proto `service_config.proto` types `choice_count` as `uint64` instead of `uint32`
+
+- **Item:** audit (W1-B-005)
+- **Summary:** In `grpc/service_config/service_config.proto`, `LeastRequestLocalityLoadBalancingPolicyConfig.choice_count` is `uint64`; gRFC A48 defines it as `uint32`.
+- **Description:** gRFC A48 shows `uint32 choice_count = 1;  // Optional, defaults to 2.` and clamps the value to `[2, 10]`. `service_config.proto` declares `uint64 choice_count = 1;`. Suggested correction: change the type to `uint32`.
+- **Evidence:** grpc-proto ffb297a: `grpc/service_config/service_config.proto` L461-L463 (`LeastRequestLocalityLoadBalancingPolicyConfig`); grpc-proposal 4125fbd: `A48-xds-least-request-lb-policy.md`.
+- **Spec:** `least_request` LB Policy (`04-client-channel/lb-policies/least_request.md`)
+
+### [low] `doc/PROTOCOL-HTTP2.md` `ASCII-Value` and `Percent-Encoded` ABNF rules forbid empty values
+
+- **Item:** audit (W2-01-004, W2-03-017); spec change ABNF-1
+- **Summary:** `doc/PROTOCOL-HTTP2.md` defines `ASCII-Value → 1*( %x20-%x7E )` and `Percent-Encoded → 1*(Percent-Byte-Unencoded / Percent-Byte-Encoded)`, which forbid an empty ASCII metadata value and an empty `grpc-message`. HTTP/2 allows empty field values, and the spec (decision ABNF-1) allows empty ASCII values.
+- **Description:** C++, Java, and Go send and accept empty ASCII metadata values, and the spec's grammar uses `*( %x20-7E )` for `ASCII-Value` and `*(...)` for `Percent-Encoded`. Suggested correction: change both `1*` to `*`.
+- **Evidence:** grpc 515aaa1743: `doc/PROTOCOL-HTTP2.md` L50 (`ASCII-Value`) and L114 (`Percent-Encoded`).
+- **Spec:** Core RPC Semantics (`02-rpc-semantics/README.md`): Metadata, Call ABNF; gRPC over HTTP/2 (`03-wire-protocol/01-http2.md`): Requests (Grammar), Responses (Grammar)
+
+### [low] `doc/statuscodes.md` truncates the `DEADLINE_EXCEEDED` description mid-sentence
+
+- **Item:** audit (W2-01-017)
+- **Summary:** The `DEADLINE_EXCEEDED` row of `doc/statuscodes.md` ends mid-sentence: "For example, a successful response from a server could have been delayed long".
+- **Description:** `google/rpc/code.proto` continues "... could have been delayed long enough for the deadline to expire." Suggested correction: complete the sentence.
+- **Evidence:** grpc 515aaa1743: [doc/statuscodes.md L12](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/doc/statuscodes.md#L12).
+- **Spec:** Core RPC Semantics (`02-rpc-semantics/README.md`): Status Codes
 
 ### [low] doc/PROTOCOL-HTTP2.md suggests 8 KiB default header size limits
 
@@ -114,6 +202,7 @@ Each bug lists the review item that identified it (an item ID such as `RLS-4`, a
 - **Summary:** The doc suggests an 8 KiB default for request and response header lists. The spec no longer names a default.
 - **Description:** "Servers may limit the size of **Request-Headers**, with a default of 8 KiB suggested." and "Clients may limit the size of **Response-Headers**, **Trailers**, and **Trailers-Only**, with a default of 8 KiB each suggested." The spec (SERVER-2) removed specific defaults and says only that implementations SHOULD provide a safe default limit, chosen by the implementation. Suggested correction: drop the "with a default of 8 KiB suggested" clauses, or replace them with "implementations SHOULD provide a safe default".
 - **Evidence:** grpc `doc/PROTOCOL-HTTP2.md`, "Requests" (Request-Headers size) and "Responses" (Response-Headers/Trailers size).
+- **Also:** grpc.io `content/en/docs/guides/metadata.md` (81fb52b) repeats the first sentence as a warning ("Servers may limit the size of Request-Headers, with a default of 8 KiB suggested."); fix it the same way.
 - **Spec:** gRPC over HTTP/2: Header list size
 
 ### [low] gRFC A113 header says "In Review" with no implementations
@@ -156,7 +245,7 @@ Each bug lists the review item that identified it (an item ID such as `RLS-4`, a
 - **Summary:** A80 (TCP telemetry) was merged on 2026-06-11 (be9a5da), but the header still says "In Review".
 - **Description:** Header: "Status: In Review", "Implemented in: C-Core", "Last updated: 2025-12-16". Suggested correction: update the status and date.
 - **Evidence:** grpc-proposal `A80-tcp-telemetry.md` (master 4125fbd), header.
-- **Spec:** Metric Catalog (A80 metrics not yet listed; METRICS-6)
+- **Spec:** Metric Catalog: TCP Metrics (incorporated by METRICS-6)
 
 ### [low] gRFC A16 precedence example separates patterns with `;`
 
@@ -560,3 +649,100 @@ Each bug lists the review item that identified it (an item ID such as `RLS-4`, a
 - **Description:** The spec now excludes ejected endpoints from the candidates, `minimum_hosts`, and the statistics, as Envoy does. Suggested correction: add the same rule to both algorithms in A50 "Ejection".
 - **Evidence:** grpc-proposal `A50-xds-outlier-detection.md` (master 4125fbd), success-rate and failure-percentage algorithms.
 - **Spec:** `outlier_detection` LB Policy: Success-Rate Algorithm / Failure-Percentage Algorithm
+
+### [low] `doc/compression.md` test cases 4 and 5 over-specify the status message and require `grpc-accept-encoding` on a client failure
+
+- **Item:** audit (W2-02-010); related: R99, COMPRESSION-4
+- **Summary:** Test case 5 (client receives an unsupported compression) says "The returned `grpc-accept-encoding` header MUST NOT contain the compression method (encoding) used", which makes no sense for a failure detected by the client. Test cases 4 and 5 both require the status message to list the supported encodings, which the spec leaves as MAY.
+- **Description:** Test case 5 copies the server-side `grpc-accept-encoding` sentence onto the client failure path, where the client returns no headers. Test cases 4 and 5 say the call fails with "its associated description indicating the unsupported condition as well as the supported ones"; the spec says the status message SHOULD identify the unsupported algorithm and MAY list the supported ones. Suggested correction: delete the `grpc-accept-encoding` sentence from test case 5 and change both to "... indicating the unsupported condition; it MAY also list the supported ones".
+- **Evidence:** grpc 515aaa1743: [doc/compression.md L111-L120](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/doc/compression.md#L111-L120) ("Test cases" items 4 and 5).
+- **Spec:** Core RPC Semantics (`02-rpc-semantics/README.md`): Compression (Errors)
+
+### [low] gRFC G2 maps `H3_FRAME_UNEXPECTED` to HTTP/2 `FRAME_SIZE_ERROR`
+
+- **Item:** audit (W2-03-014)
+- **Summary:** G2's error-code table lists `FRAME_SIZE_ERROR` as the HTTP/2 equivalent of `H3_FRAME_UNEXPECTED (0x0105)`; the equivalent is `PROTOCOL_ERROR`.
+- **Description:** G2 has `H3_FRAME_UNEXPECTED(0x0105)|FRAME_SIZE_ERROR|INTERNAL` and `H3_FRAME_ERROR(0x0106)|FRAME_SIZE_ERROR|INTERNAL`. [RFC 9114 Appendix A.4](https://www.rfc-editor.org/rfc/rfc9114#appendix-A.4) maps HTTP/2 `PROTOCOL_ERROR` to `H3_GENERAL_PROTOCOL_ERROR` or a more specific code such as `H3_FRAME_UNEXPECTED`, and `FRAME_SIZE_ERROR` to `H3_FRAME_ERROR`. Both rows map to gRPC `INTERNAL`, so behavior is unaffected; the spec's table uses `PROTOCOL_ERROR`. Suggested correction: change the HTTP/2 column of the `H3_FRAME_UNEXPECTED` row to `PROTOCOL_ERROR(1)`.
+- **Evidence:** grpc-proposal 4125fbd: `G2-http3-protocol.md` L79.
+- **Spec:** gRPC over HTTP/3 (`03-wire-protocol/03-http3.md`): error code mapping
+
+### [low] `doc/naming.md` has a stale note that C-core's default DNS resolver does not support an authority
+
+- **Item:** audit (W2-04-022); related: R34
+- **Summary:** `doc/naming.md` says "In C-core, the default DNS resolver does not support this, but the c-ares based resolver supports specifying this in the form \"IP:port\"." C-core's default DNS resolver now passes the URI authority to the EventEngine DNS resolver as the DNS server.
+- **Description:** The note describes the old native resolver. The spec leaves DNS-server authority support implementation-defined (R34), so the doc is only stale, not in conflict with the spec. Suggested correction: drop the parenthetical, or say that support depends on the DNS resolver in use.
+- **Evidence:** grpc 515aaa1743: [doc/naming.md L32-L35](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/doc/naming.md#L32-L35); [dns_resolver.cc L192](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/src/core/resolver/dns/dns_resolver.cc#L192) (`GetDNSResolver({/*dns_server=*/authority()})`).
+- **Spec:** Name Resolution (`04-client-channel/03-name-resolution.md`): `dns`
+
+### [low] `grpc/doc/health-checking.md` omits `Health.List`, `HealthListRequest`, and `HealthListResponse` added by gRFC A90
+
+- **Item:** audit (W2-12-007)
+- **Summary:** The service definition in `doc/health-checking.md` shows only `Check` and `Watch`, omitting the `List` RPC and its `HealthListRequest` and `HealthListResponse` messages added by gRFC A90.
+- **Description:** Suggested correction: update the embedded `grpc.health.v1` proto snippet to match grpc-proto `grpc/health/v1/health.proto`, or link to it.
+- **Evidence:** grpc 515aaa1743: [doc/health-checking.md L26-L50](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/doc/health-checking.md#L26-L50); grpc-proto ffb297a: `grpc/health/v1/health.proto` L43-L74.
+- **Spec:** Health Service (`07-services/01-health.md`): Service Definition; `List`
+
+### [low] gRFC A80 has typo `8196` instead of `8192` in the `grpc.transfer_size` table
+
+- **Item:** audit (W2-13-022)
+- **Summary:** The `grpc.transfer_size` bucket table in `A80-tcp-telemetry.md` lists `8196` instead of `8192` for the "First 8KiB" row.
+- **Description:** 8 KiB is 8192 bytes. C++ copied the typo into the metric description ("Time taken to transmit the first 8196 bytes of a write.") while using 8192 in code. The spec uses `8192`. Suggested correction: change `8196` to `8192`.
+- **Evidence:** grpc-proposal 4125fbd: `A80-tcp-telemetry.md` L91 (`| \[8KiB, 64KiB) | First 8KiB | 8196 |`); grpc 515aaa1743: [tcp_telemetry.cc L123](https://github.com/grpc/grpc/blob/515aaa1743ec9a318e7e22d11a5bfaa835d5fa81/src/core/lib/event_engine/tcp_telemetry.cc#L123).
+- **Spec:** Metric Catalog (`08-observability/04-metrics.md`): TCP Metrics
+
+### [low] Broken link to `A108-otel-custom-per-rpc-label.md` in gRFCs A66 and A96
+
+- **Item:** audit (W2-13-023)
+- **Summary:** `A66-otel-stats.md` and `A96-retry-otel-stats.md` link to `A108-otel-custom-per-rpc-label.md`; the file is `A108-otel-custom-per-call-label.md`.
+- **Description:** In both gRFCs, the "Updated by: gRFC A108: OpenTelemetry Custom Per-Call Metric Label" header line links to the nonexistent file `A108-otel-custom-per-rpc-label.md`. Suggested correction: change the link target to `A108-otel-custom-per-call-label.md`.
+- **Evidence:** grpc-proposal 4125fbd: `A66-otel-stats.md` L10-L11, `A96-retry-otel-stats.md` L10-L11.
+- **Spec:** Instrumentation Architecture (`08-observability/02-instrumentation.md`): Custom Per-Call Label
+
+### [low] gRFC A59 examples have an invalid timestamp and trailing commas, and its Go `PolicyName` comment contradicts the xDS case
+
+- **Item:** audit (W2-11-025)
+- **Summary:** A59's example log entry uses the Go layout string `2006-01-02T15:04:05.999999999Z07:00` as a timestamp, two JSON examples have trailing commas, and the Go API comment says `PolicyName` is "the authorization policy name or the xDS RBAC filter name", while A59's own field table says the policy name is "not applicable in xDS case".
+- **Description:** `Z07:00` is Go `time` layout syntax; a valid RFC 3339 timestamp has either `Z` or a numeric offset, not both. The xDS and authorization-policy config examples end objects with a trailing comma, which is not valid JSON. The spec says the policy name is empty for xDS RBAC, matching A59's table; grpc-go copied the contradicting comment into `authz/audit/audit_logger.go`. Suggested correction: use a real timestamp such as `2023-05-09T01:40:06.798505167Z`, remove the trailing commas, and change the comment to "the authorization policy name; empty for xDS RBAC".
+- **Evidence:** grpc-proposal 4125fbd: `A59-audit-logging.md` L53, L296, L305, L312, L445; grpc-go cbf30c4130: `authz/audit/audit_logger.go` L69.
+- **Spec:** Authorization (`06-security/04-authorization.md`): Audit Logging; xDS HTTP Filters (`09-xds/07-http-filters.md`): Audit Logging Configuration
+
+### [low] gRFC A41 header "Implemented in" is a template placeholder
+
+- **Item:** GRFC-STATUS
+- **Summary:** `A41-xds-rbac.md` lists "Implemented in: \<language, ...\>", although xDS RBAC is implemented in C++, Java, and Go.
+- **Description:** Header: "Status: Ready for Implementation", "Implemented in: \<language, ...\>", "Last updated: 2021-09-08". Suggested correction: set "Implemented in: C++, Java, Go" and update the date.
+- **Evidence:** grpc-proposal 4125fbd: `A41-xds-rbac.md` L6-L7.
+- **Spec:** xDS HTTP Filters (`09-xds/07-http-filters.md`): RBAC
+
+### [low] gRFC A43 schema allows an empty policy `name`
+
+- **Item:** AUTHZ-4
+- **Summary:** A43's JSON schema requires `name` but allows the empty string; the spec now requires a non-empty `name`.
+- **Description:** A43's schema defines the policy `name` as `"type": "string"` with description "The name of an authorization policy. It is mainly for monitoring and error message generation." and `"required": ["name", "allow_rules"]`; nothing excludes `""`. The spec now says the policy `name` MUST NOT be empty (Java and Go reject `""`). Suggested correction: add `"minLength": 1` to `name` in the schema, or say in its description that it must be non-empty. (A43's `deny_rules` description, "If none of the deny rules matches or there are no deny rules, the allow rules will be evaluated", already agrees with the spec's "an empty array is the same as absent".)
+- **Evidence:** grpc-proposal `A43-grpc-authorization-api.md` (master 4125fbd), policy JSON schema, `properties.name`.
+- **Spec:** gRPC Authorization: 2.1 Schema
+
+### [low] gRFC A37 says only that the LOGICAL_DNS `port_value` "must be set"
+
+- **Item:** XDS_CDS-21
+- **Summary:** A37 doesn't say whether "set" means the oneof case or a non-zero value, and gives no range. Implementations read it differently.
+- **Description:** A37, Cluster validation: "The `port_value` field must be set." C++ and Java read this as the `port_specifier` oneof being set, so they accept an explicit 0. Go reads it as non-zero. None of the three applies an upper bound. The spec now says `port_value` MUST be in 1–65535 (an unset port, an explicit 0, or a value above 65535 NACKs the Cluster). Suggested correction: "The `port_value` field must be in the range 1–65535; a value of 0 (or unset) or above 65535 causes the resource to be NACKed."
+- **Evidence:** grpc-proposal `A37-xds-aggregate-and-logical-dns-clusters.md` (master 4125fbd), Cluster validation section.
+- **Spec:** Cluster: Logical DNS Clusters
+
+### [low] gRFC A61 doesn't say that `weighted_target` should stop applying its own sticky TRANSIENT_FAILURE
+
+- **Item:** WEIGHTED_TARGET-2
+- **Summary:** A61 moved sticky TRANSIENT_FAILURE into `pick_first` (via A62) and made petiole policies rely on it, but it doesn't update `weighted_target`, whose implementations still apply their own sticky TRANSIENT_FAILURE when aggregating.
+- **Description:** gRFC A28 says only that "The connectivity state of the policy will be the aggregated state of all child policies." C++ and Go added sticky-TRANSIENT_FAILURE handling to `weighted_target` aggregation before A62. A61 notes that "as of [gRFC A62][A62], pick_first has sticky-TF behavior in all languages" but never says that parents like `weighted_target` should now aggregate with the normal rules. The spec does (normal rules, relying on `pick_first`). Suggested correction: add a note to A61 (or A28) that `weighted_target` aggregates its children's current states with the normal rules.
+- **Evidence:** grpc-proposal `A61-IPv4-IPv6-dualstack-backends.md` and `A28-xds-traffic-splitting-and-routing.md` ("Weighted target LB policy"), master 4125fbd.
+- **Spec:** `weighted_target` LB Policy: Calls From Children
+
+### [low] gRFC A58 doesn't mention clamping endpoint weights before building the scheduler
+
+- **Item:** WRR-20
+- **Summary:** A58 describes WRR picking in proportion to endpoint weights with no clamping, but C++ and Java clamp weights relative to the mean, and the spec now requires it.
+- **Description:** A58 says each endpoint is picked in proportion to its weight and doesn't mention any bound on the ratio between weights. C++ (grpc/grpc#33045) and Java (grpc/grpc-java#10480) later added clamping to `[MIN_RATIO × mean, 10 × mean]` (MIN_RATIO 0.01 and 0.1) to bound pick cost, and the spec now requires clamping with `MAX_RATIO` 10 and `MIN_RATIO` in [0.01, 0.1]. Suggested correction: add the clamping rule and its rationale to A58's scheduler description.
+- **Evidence:** grpc-proposal `A58-client-side-weighted-round-robin-lb-policy.md` (master 4125fbd).
+- **Spec:** `weighted_round_robin` LB Policy: Building the Scheduler
+

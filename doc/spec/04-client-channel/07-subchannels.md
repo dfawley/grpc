@@ -5,7 +5,7 @@
 
 # 4.7 Subchannels and Connections
 
-<!-- Sources: doc/connection-backoff.md, A61, A105, grpc/service_config/service_config.proto (ConnectionScaling), A17, A51 -->
+<!-- Sources: doc/connection-backoff.md, A17, A51, A61, A94, A105 -->
 
 A **subchannel** represents a potential or established connection to a
 single server address. The channel implements subchannels. LB policies
@@ -156,6 +156,10 @@ The whole attempt is bounded by the connect deadline from the backoff
 algorithm ([Connection Backoff](#7-connection-backoff)). If the deadline passes
 first, the attempt fails.
 
+Subchannels record connection-attempt, open-connection, and disconnection
+metrics as specified in
+[Metric Catalog: Subchannel Metrics](../08-observability/04-metrics.md#4-subchannel-metrics).
+
 ## 7. Connection Backoff
 
 Connection attempts are spaced out with exponential backoff and jitter.
@@ -194,7 +198,9 @@ In the subchannel state model, this loop is driven by the LB policy:
 - The backoff state is also reset by `ResetBackoff()`, which the channel
   API can trigger (see [Load Balancing](06-load-balancing.md)). If the
   subchannel is in TRANSIENT_FAILURE at that time, it ends the backoff
-  immediately and reports IDLE.
+  immediately and reports IDLE. If the subchannel is READY with a pending
+  connection-scaling backoff timer ([Picking a Connection](#84-picking-a-connection)),
+  it cancels the timer while staying READY and reprocesses its queued calls.
 
 These parameters MAY be configurable through channel options. Any other
 algorithm MUST make backoffs started at the same time disperse, and MUST
@@ -215,12 +221,9 @@ existing connections are at that limit, up to
 The value of `max_connections_per_subchannel` for a subchannel comes from
 one of two places:
 
-- **Service config:**
-  `connectionScaling.maxConnectionsPerSubchannel` (proto
-  `ServiceConfig.ConnectionScaling.max_connections_per_subchannel`, a
-  `google.protobuf.UInt32Value`, in
-  `grpc/service_config/service_config.proto`). It applies to all
-  subchannels in the channel. See [Service Config](04-service-config.md).
+- **Service config:** `connectionScaling.maxConnectionsPerSubchannel`
+  (see [Service Config](04-service-config.md#56-connectionscaling)). It
+  applies to all subchannels in the channel.
 
   ```json
   { "connectionScaling": { "maxConnectionsPerSubchannel": 4 } }
@@ -233,7 +236,7 @@ one of two places:
 
 Rules:
 
-- If unset, the value is **1**, which means no scaling.
+- If unset or 0, the value is **1**, which means no scaling.
 - The channel enforces a **cap**, 10 by default, which the application
   can change with a channel option. Values above the cap are reduced to
   the cap. The subchannel itself applies the cap, so it covers every
@@ -376,13 +379,21 @@ def OnRpcComplete(self, connection):
 def OnMaxConnectionsPerSubchannelChanged(self, value):
   self.max_connections_per_subchannel = value
   self.RetryRpcsFromQueue()
+
+def OnResetBackoff(self):
+  self.backoff_state = None
+  if self.pending_backoff_timer is not None:
+    self.pending_backoff_timer.Cancel()
+    self.pending_backoff_timer = None
+    self.RetryRpcsFromQueue()
 ```
 
 The queue is reprocessed, from oldest to newest, stopping at the first
 call that cannot be dispatched, when:
 
 - A connection attempt succeeds.
-- The backoff timer fires.
+- The backoff timer fires, or `ResetBackoff()` cancels a pending backoff
+  timer.
 - A connection closes while others remain.
 - A connection reports a new `MAX_CONCURRENT_STREAMS`.
 - A call on one of the connections completes.
@@ -412,8 +423,7 @@ prevent the subchannel from processing the transport's next
 ## 9. Connection-Scoped Watchers and Streams
 
 Some features need data that the client obtains by running a gRPC call on
-the connection of a particular subchannel, rather than on a channel. Two
-such features are defined in this specification:
+the connection of a particular subchannel, rather than on a channel:
 
 | Feature | Watcher | Stream method | Feature-specific behavior |
 | --- | --- | --- | --- |
@@ -519,8 +529,9 @@ follows:
   all of the channel's subchannels.
 - The internal subchannel API exposed to LB policies MUST provide the
   operations listed in [Load Balancing](06-load-balancing.md):
-  connectivity watch, health watch, connection request, backoff reset,
-  OOB backend metric watch, and release.
+  connectivity watch, health watch, connection request, OOB backend metric
+  watch, and release. Whether it also provides backoff reset is
+  implementation-defined.
 - The internal subchannel API MUST let LB policies at any level of the
   policy tree register and unregister connection-scoped watchers
   ([Connection-Scoped Watchers and Streams](#9-connection-scoped-watchers-and-streams)) on any subchannel

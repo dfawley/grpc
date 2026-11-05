@@ -5,7 +5,7 @@
 
 # `xds_override_host` LB Policy
 
-<!-- Sources: A55, A60, A61, A74, A75, grpc-proto grpc/service_config/service_config.proto -->
+<!-- Sources: A55, A60, A61, A74, A75 -->
 
 > **Experimental:** This policy is registered as `xds_override_host_experimental`.
 
@@ -58,9 +58,6 @@ Registered name: `xds_override_host_experimental`.
 cluster's `priority` policy (one child per EDS priority).
 
 ## 2. Configuration
-
-Proto: `OverrideHostLoadBalancingPolicyConfig` in
-`grpc/service_config/service_config.proto`.
 
 ```json
 {

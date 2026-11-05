@@ -39,20 +39,12 @@ Each entry of `endpoints` is processed as follows:
 | Field | Rule |
 | --- | --- |
 | `load_balancing_weight` | `UInt32Value`, the locality weight. If unset or 0, the **whole entry is ignored**: it is left out of the parsed resource and its other fields are not validated. |
-| `locality` | MUST be present; otherwise the resource is rejected. `region`, `zone`, and `sub_zone` together identify the locality (empty strings are allowed). |
+| `locality` | `region`, `zone`, and `sub_zone` together identify the locality (empty strings are allowed). If unset, the entry has the empty locality (all three fields empty); this is not an error. |
 | `priority` | `uint32`, default 0. See the priority rules below. |
 | `lb_endpoints` | The locality's endpoints ([LbEndpoint](#3-lbendpoint)), unless `leds_cluster_locality_config` is set. An empty list is allowed; the locality then has no endpoints and is unreachable. |
 | `leds_cluster_locality_config` | If set, `lb_endpoints` is ignored, and the endpoints come from an `LbEndpointCollection` resource ([LbEndpointCollection (LEDS List Collections)](#7-lbendpointcollection-leds-list-collections)). |
 | `metadata` | Parsed with the metadata rules in [Common Types](01-common-types.md) ([Metadata](01-common-types.md#9-metadata)). Errors reject the resource. Used for the locality-level HTTP CONNECT proxy address ([Endpoint Metadata](#4-endpoint-metadata)). |
 | `proximity` | Ignored. |
-
-<!-- REVIEW(divergence) [XDS_EDS-2]: Java: absent locality is treated as the empty locality
-(region/zone/sub_zone all "") (xds/XdsEndpointResource.java parseLocality).
-Go: rejects ("locality without ID"), checked before the zero-weight skip, so it
-also rejects zero-weight entries without a locality
-(internal/xds/xdsclient/xdsresource/unmarshal_eds.go). C++: rejects ("field not
-present"), after the zero-weight skip (src/core/xds/grpc/xds_endpoint_parser.cc).
-spec says: reject (C++/Go majority), zero-weight entries not validated (C++). -->
 
 Rules across all entries that were not ignored:
 
@@ -144,13 +136,11 @@ Each entry of `policy.drop_overloads`:
 | Field | Rule |
 | --- | --- |
 | `category` | MUST be non-empty. Used as the drop category name in load reports. |
-| `drop_percentage` | MUST be present. A `FractionalPercent`, normalized to requests per million and capped at 1,000,000 (see [Common Types](01-common-types.md), [Fractional Percentages](01-common-types.md#5-fractional-percentages)). An unknown denominator rejects the resource. |
+| `drop_percentage` | A `FractionalPercent`, normalized to requests per million and capped at 1,000,000 (see [Common Types](01-common-types.md), [Fractional Percentages](01-common-types.md#5-fractional-percentages)). If unset, the drop rate is 0. An unknown denominator rejects the resource. |
 
 The categories are kept in list order. How drops are applied and reported is
 specified in [xDS LB Policies](../06-lb-policies.md) and
 [LRS](../10-load-reporting.md).
-
-<!-- REVIEW(divergence) [XDS_EDS-4]: drop_overloads parsing. C++ follows this table (empty category, absent drop_percentage, and unknown denominator reject; capped at 1,000,000), though HUNDRED/TEN_THOUSAND numerators are multiplied in uint32 and can wrap before the cap. Java rejects an unknown denominator and caps, but accepts an empty category and treats an absent drop_percentage as 0. Go (unmarshal_eds.go parseDropPolicy, since v1.84.0) rejects an unknown denominator, caps, and normalizes in 64-bit, but like Java accepts an empty category and treats an absent drop_percentage as 0. (Before v1.84.0, Go did no validation and computed the rate in uint32 in xds_cluster_impl: an unknown denominator panicked with integer divide by zero, and large numerators or values above 100% dropped the wrong fraction.) Spec says: C++ (reject invalid entries, normalize per million, cap at 100%). -->
 
 ## 6. Parsed ClusterLoadAssignment
 

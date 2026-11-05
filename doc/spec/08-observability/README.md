@@ -5,7 +5,7 @@
 
 # 8. Observability
 
-<!-- Sources: A3, A14, A16, A45, A66, A72, A78, A79, A88, A89, A94, A96, A105, A108, A118, doc/binary-logging.md -->
+<!-- Sources: A3, A14, A16, A45, A66, A72, A78, A79, A80, A88, A89, A91, A94, A96, A105, A108, A118, doc/binary-logging.md -->
 
 This section specifies the facilities through which gRPC exposes information
 about its own behavior to applications, operators, and external monitoring

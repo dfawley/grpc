@@ -5,11 +5,11 @@
 
 # 6.3 Call Credentials
 
-<!-- Sources: L62, A54, A83 (call credentials part), A97 (call credentials part), doc/server_side_auth.md, doc/http-grpc-status-mapping.md, doc/connection-backoff.md -->
+<!-- Sources: L62, A54, A97 (call credentials part), doc/server_side_auth.md, doc/http-grpc-status-mapping.md, doc/connection-backoff.md -->
 
 Call credentials attach per-RPC authentication metadata, such as bearer
 tokens, to RPCs. This section defines how call credentials behave in general,
-and three built-in types. The security model, composition, and security
+and two built-in types. The security model, composition, and security
 levels are in [Security Model](01-security-model.md).
 
 ## 1. General Behavior
@@ -94,11 +94,14 @@ exactly one space after `Bearer`. Minimum security level:
 
 ## 3. Token-Fetching Credentials
 
-The GCP service account identity credentials ([GCP Service Account Identity Credentials](#4-gcp-service-account-identity-credentials))
+Token-fetching credentials (for example, the vendor-specific
+[GCP Service Account Identity Credentials](../10-vendor-specific/03-gcp-service-account-identity-credentials.md))
 obtain a JWT from a source, cache it, and attach it as a bearer token, using
-the behavior in this section. "Fetch" means obtaining the token from the
+the behavior in this section. (Other vendor-specific credentials that fetch
+Google OAuth 2.0 tokens are listed in
+[Google Call Credentials](../10-vendor-specific/05-google-call-credentials.md).) "Fetch" means obtaining the token from the
 source (for these credentials, an HTTP request). Implementations of JWT
-token file credentials ([JWT Token File Credentials](#5-jwt-token-file-credentials)) MAY use the same behavior,
+token file credentials ([JWT Token File Credentials](#4-jwt-token-file-credentials)) MAY use the same behavior,
 with a file read as the fetch.
 
 ### 3.1 Parameters
@@ -120,6 +123,8 @@ with a file read as the fetch.
 - A token is *valid* while now < effective expiration.
 - If `exp` cannot be read (the token is malformed), the fetch counts as a
   failure with status `UNAUTHENTICATED`, and the cache is not updated.
+
+<!-- REVIEW(divergence) [CALL_CREDS-4]: A successful fetch can return a token whose effective expiration (exp - 30 s) has already passed. C++ TokenFetcherCredentials caches it, attaches it to every queued attempt, and resets backoff (a new FetchState), so the next attempt starts a new fetch at once. Go's GCP service account identity credentials cache it and reset backoff, but fail the waiting attempts with UNAVAILABLE ("fetched token is expired"); the next attempt again fetches at once. Java uses google-auth IdTokenCredentials (behavior not verified). With a persistently expired token (for example, a skewed metadata-server clock), both C++ and Go fetch once per attempt with no backoff. Spec says: the pseudocode treats any success with a readable exp as success (cache it, reset backoff, complete queued attempts with the token); an expired token is not mentioned. -->
 
 ### 3.3 Algorithm
 
@@ -175,38 +180,11 @@ Rules from the algorithm:
   using the cached token until it expires. A new fetch can start once the
   backoff timer expires.
 
-## 4. GCP Service Account Identity Credentials
-
-> **Introduced by:** [gRFC A83: xDS GCP Authentication Filter](https://github.com/grpc/proposal/blob/master/A83-xds-gcp-authn-filter.md)
-
-These credentials get a service account identity JWT from the GCP metadata
-server. They are not specific to xDS. (The xDS GCP authentication HTTP filter
-uses them. See [xDS HTTP Filters](../09-xds/07-http-filters.md).)
-
-- **Parameter:** `audience` (string). It is placed in the token request.
-- **Fetch:** an HTTP GET request to
-  ```
-  http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=<audience>
-  ```
-  with the request header `Metadata-Flavor: Google`.
-- **Success:** an HTTP 200 response. The body is the JWT.
-- **Failure status:**
-  - If the request fails with no HTTP status (connection error, I/O error,
-    timeout): `UNAVAILABLE`.
-  - If the HTTP status maps to `UNAVAILABLE` under the HTTP-to-gRPC status
-    mapping (see [gRPC over HTTP/2](../03-wire-protocol/01-http2.md)), meaning 429, 502, 503,
-    or 504: `UNAVAILABLE`.
-  - Any other non-200 HTTP status: `UNAUTHENTICATED`.
-  - A 200 response whose body has no readable `exp`: `UNAUTHENTICATED`.
-- **Metadata:** `authorization: Bearer <jwt>`.
-- **Minimum security level:** `PRIVACY_AND_INTEGRITY`.
-
-## 5. JWT Token File Credentials
+## 4. JWT Token File Credentials
 
 > **Introduced by:** [gRFC A97: xDS JWT Call Credentials](https://github.com/grpc/proposal/blob/master/A97-xds-jwt-call-creds.md)
 
-Implementations MAY provide JWT token file credentials, as described in
-[gRFC A97](https://github.com/grpc/proposal/blob/master/A97-xds-jwt-call-creds.md).
+Implementations MAY provide JWT token file credentials.
 These credentials read a JWT from a local file, given by path, and attach it
 as `authorization: Bearer <jwt>`. Their minimum security level is
 `PRIVACY_AND_INTEGRITY`. They are not specific to xDS. The xDS bootstrap can
@@ -217,12 +195,10 @@ Implementations SHOULD ignore whitespace surrounding the token in the file.
 Other details, including how the token is cached and refreshed and how an
 expired token is handled, are implementation-defined.
 
-## 6. API Requirements
+## 5. API Requirements
 
 - The credentials API MUST provide a way to create access token credentials
   from a token string.
-- It MUST provide a way to create GCP service account identity credentials
-  from an audience.
 - It MAY provide a way to create JWT token file credentials from a file path.
 - It MUST let applications implement their own call credentials. Such a
   credential has the inputs in [Inputs](#12-inputs) available to it (directly or

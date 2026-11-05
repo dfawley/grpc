@@ -179,6 +179,8 @@ to a resource in a different authority. Rules for each resource are in
   MUST be reset whenever a stream receives a response, so after a stream
   that received at least one response, the next attempt uses the initial
   backoff.
+
+<!-- REVIEW(divergence) [XDS_CLIENT-6]: After an ADS stream that received at least one response closes, C++ (`RetryableCall::OnCallFinishedLocked` in `xds_client.cc`) and Java (`ControlPlaneClient.handleRpcStreamClosed`) reset the backoff and wait the initial backoff (~1 s, jittered) before starting the next stream, whereas Go (`ads_stream.go` `runner` returning `ErrResetBackoff`, and `backoff.RunF`) starts the next stream immediately. Spec says: after a stream that received at least one response, the next attempt uses the initial backoff. -->
 - On a new stream, the XdsClient sends one request for each resource type
   that has subscriptions on this channel. Each request lists all subscribed
   names of that type and carries the last accepted `version_info` for that
@@ -213,11 +215,15 @@ gRPC never sends a wildcard subscription.
   list in a later request means "unsubscribe from everything of this type",
   not wildcard. The XdsClient MUST NOT send the *first* request for a type on
   a stream with an empty `resource_names`.
-- The XdsClient MUST keep the cache entry for an unsubscribed name until the
+- An XdsClient that can merge the removal of a name and a later
+  re-subscription to it into one request, or can otherwise skip sending the
+  removal, MUST keep the cache entry for an unsubscribed name until the
   request removing it has actually been sent, or until there is no active
   stream. If a new watch for the same name starts before then, the existing
   entry is reused, so the client does not wait for a resource that the
-  server believes it already sent.
+  server believes it already sent. An XdsClient that sends every
+  subscription change as its own request, in order, MAY delete the entry as
+  soon as the last watch is cancelled.
 - The XdsClient MAY coalesce requests. For example, it can keep at most one
   send outstanding per stream and, when that send completes, send only the
   latest state for each type that changed.
@@ -478,12 +484,14 @@ not exist, so the XdsClient runs a timer for each resource on each stream:
 
   The timer MUST NOT start while the xDS channel is connecting or in
   connection backoff, or while a wait-for-ready stream is still queued.
-- The timer is **not** started if the resource is already cached (for
-  example, after a stream restart), or if the resource has already been seen
-  on this stream, or if the timer is already running.
+- The timer is **not** started if the entry already holds a cached resource
+  (for example, after a stream restart), or if the resource has already been
+  seen on this stream, or if the timer is already running.
 - **Stop**: when the resource, or a server-reported error for it, arrives on
   the stream, or when the stream ends. On a new stream, the timer starts
-  again under the same rules if the resource is still not cached.
+  again under the same rules if the entry still holds no cached resource.
+
+<!-- REVIEW(divergence) [XDS_CLIENT-7]: On ADS stream restart, C++ (`MaybeStartTimer` in `xds_client.cc`) restarts the 15s/30s does-not-exist timer for any entry that holds no cached resource (including REQUESTED, DOES_NOT_EXIST, TIMEOUT, uncached NACKED, and uncached RECEIVED_ERROR), Java (`XdsClientImpl.java` `startMissingResourceTimers` / `restartTimer`, skipped when `data != null || absent`) restarts it for REQUESTED and uncached NACKED (not DOES_NOT_EXIST or TIMEOUT), and Go (`ads_stream.go` `onError` / `startWatchTimersLocked`) restarts it only for resources that have not yet had any response or timeout on any stream. Spec says: on a new stream, the timer starts again if the entry still holds no cached resource. -->
 - **Expiry**: if the entry still has no cached resource when the timer
   fires:
   - without `resource_timer_is_transient_error`: state `DOES_NOT_EXIST`,
@@ -561,9 +569,10 @@ Fallback for an authority starts when **both** of these are true:
    (state `REQUESTED`), or the authority sets
    `fallback_on_reachability_only: true` in the bootstrap.
 
-A resource counts as cached if it has been received (whatever its validity),
-or if it has been found not to exist. Only `REQUESTED` entries count as
-uncached.
+For fallback purposes (as opposed to the does-not-exist timer in
+[Does-not-exist timer](#74-does-not-exist-timer)), a resource counts as cached
+if it has been received (whatever its validity), or if it has been found not to
+exist. Only `REQUESTED` entries count as uncached here.
 
 ### 8.3 Process
 

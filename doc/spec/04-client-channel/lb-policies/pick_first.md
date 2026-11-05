@@ -5,7 +5,7 @@
 
 # `pick_first` LB Policy
 
-<!-- Sources: doc/load-balancing.md, grpc/service_config/service_config.proto (PickFirstConfig), A61, A62, A105, A88, A113 -->
+<!-- Sources: doc/load-balancing.md, A61, A62, A105, A88, A113 -->
 
 ## 1. Overview
 
@@ -25,8 +25,6 @@ Registered name: `pick_first`.
 
 ## 2. Configuration
 
-Proto: `PickFirstConfig` in `grpc/service_config/service_config.proto`.
-
 ```json
 { "pick_first": { "shuffleAddressList": false } }
 ```
@@ -41,7 +39,7 @@ Proto: `PickFirstConfig` in `grpc/service_config/service_config.proto`.
 | --- | --- | --- | --- |
 | Endpoint weight | Endpoint attribute endpoint weight, set by the resolver or, with xDS, by `cds` | 1 | Relative weight in the shuffle when `shuffleAddressList` is true ([Address List Processing](#address-list-processing)). |
 | Happy Eyeballs Connection Attempt Delay | Channel option | 250 ms | The delay before the next address is tried in parallel ([RFC 8305 §5](https://www.rfc-editor.org/rfc/rfc8305#section-5); [Happy Eyeballs Connection Algorithm](#happy-eyeballs-connection-algorithm)). Clamped as described in [Validation](#22-validation). |
-| Internal health-reporting option | Top-level attribute OR builder option, set only by petiole parent policies | disabled | Whether to start a health watch on the selected subchannel and report its health state instead of READY ([Health Reporting Under Petiole Policies](#health-reporting-under-petiole-policies)). |
+| Internal health-reporting option | Top-level attribute or builder option, set only by petiole parent policies | disabled | Whether to start a health watch on the selected subchannel and report its health state instead of READY ([Health Reporting Under Petiole Policies](#health-reporting-under-petiole-policies)). |
 
 ### 2.2 Validation
 
@@ -51,6 +49,8 @@ Proto: `PickFirstConfig` in `grpc/service_config/service_config.proto`.
 
 Other inputs ([Other Inputs](#21-other-inputs)) are validated as follows:
 
+- **Endpoint weight:** a weight of 0 (or less, where signed) MUST be treated
+  as 1.
 - **Happy Eyeballs Connection Attempt Delay:** values below 100 ms MUST be
   treated as 100 ms, and values above 2 s MUST be treated as 2 s.
 
@@ -91,9 +91,9 @@ builds a flat, ordered address list as follows:
    endpoints with a weighted random sort (Efraimidis–Spirakis weighted
    random sampling): assign each endpoint the key `u^(1/weight)`, where
    `u` is a uniform random number in `(0, 1)` drawn separately for each
-   endpoint and `weight` is the endpoint's weight attribute (1 if absent),
-   then sort the endpoints by key in descending order. `u` MAY include the
-   bounds 0 and 1, as long as that causes no failure. With equal weights,
+   endpoint and `weight` is the endpoint's weight attribute (1 if absent or
+   ≤ 0), then sort the endpoints by key in descending order. `u` MAY include
+   the bounds 0 and 1, as long as that causes no failure. With equal weights,
    this is a uniform random permutation. The order of addresses within
    each endpoint is not changed. A petiole parent passes a single
    endpoint, so shuffling has no effect there.
@@ -293,7 +293,7 @@ Re-resolution is requested as described in [Re-resolution](#re-resolution).
 | Event | Current state | Action |
 | --- | --- | --- |
 | Selected subchannel reports IDLE | READY | Release subchannels, request re-resolution, report IDLE. |
-| Selected subchannel reports CONNECTING or TRANSIENT_FAILURE | READY | Can happen with connection scaling ([MAX_CONCURRENT_STREAMS Connection Scaling](../07-subchannels.md#8-max_concurrent_streams-connection-scaling)). Request re-resolution, report CONNECTING, and start a new Happy Eyeballs pass over all subchannels. |
+| Selected subchannel reports CONNECTING or TRANSIENT_FAILURE | READY | Can happen with connection scaling ([Subchannels and Connections: MAX_CONCURRENT_STREAMS Connection Scaling](../07-subchannels.md#8-max_concurrent_streams-connection-scaling)). Request re-resolution, report CONNECTING, and start a new Happy Eyeballs pass over a subchannel list built from the most recently processed address list; the previously selected subchannel is no longer selected. |
 
 A health watch is started only on the selected subchannel and only when
 the internal health-reporting option is enabled; its state is what

@@ -28,7 +28,8 @@ methods of its backends. Reflection covers protobuf-defined services only.
 ## 1. Service Definition
 
 The service is `grpc.reflection.v1.ServerReflection`, defined in
-`grpc/reflection/v1/reflection.proto`. It has one bidirectional streaming
+[`grpc/reflection/v1/reflection.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/reflection/v1/reflection.proto).
+It has one bidirectional streaming
 method, `/grpc.reflection.v1.ServerReflection/ServerReflectionInfo`:
 
 ```protobuf
@@ -151,7 +152,8 @@ A `file_descriptor_response` answers a file, symbol, or extension query:
   descriptor database, which is the one the server uses for its own services.
 
 Known `google.protobuf.Any` types can be looked up with `file_containing_symbol`,
-using the type name taken from the `Any` type URL.
+using the type name taken from the `Any` type URL, if those types are present
+in the server's descriptor source.
 
 ## 5. Errors
 
@@ -167,9 +169,11 @@ a human-readable description.
 
 ## 6. Versions
 
+> **Introduced by:** [gRFC A15: Promote Reflection](https://github.com/grpc/proposal/blob/master/A15-promote-reflection.md)
+
 The service is also defined in package `grpc.reflection.v1alpha`
-(`grpc/reflection/v1alpha/reflection.proto`, service
-`grpc.reflection.v1alpha.ServerReflection`), with messages that are identical
+([`grpc/reflection/v1alpha/reflection.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/reflection/v1alpha/reflection.proto),
+service `grpc.reflection.v1alpha.ServerReflection`), with messages that are identical
 on the wire. That version is deprecated.
 
 * Servers that offer reflection MUST serve `grpc.reflection.v1.ServerReflection`.
@@ -182,11 +186,12 @@ on the wire. That version is deprecated.
 ## 7. API Requirements
 
 1. gRPC MUST provide a reflection service implementation that applications can
-   register on a server. Once registered, it reports every service registered
-   on that server and answers descriptor queries from the descriptors of those
-   services (for generated services, from the descriptors embedded by the code
-   generator). Registering it MUST register both the `v1` and `v1alpha`
-   services.
+   register on a server. Once registered, it reports every protobuf service
+   registered on that server and answers descriptor queries from the descriptors
+   of those services (for generated services, from the descriptors embedded by
+   the code generator; implementations MAY also expose other descriptors linked
+   into the process's generated descriptor pool). Registering it MUST register
+   `v1` and SHOULD also register `v1alpha` (see [Versions](#6-versions)).
 2. The API MUST let applications supply additional descriptors, or a custom
    descriptor source, for servers whose services are not all defined by
    compiled-in protobuf code (for example, proxies or dynamic services).

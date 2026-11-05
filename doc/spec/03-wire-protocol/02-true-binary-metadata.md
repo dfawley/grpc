@@ -44,7 +44,9 @@ binary (`-bin`) header like this instead of with base64:
 True-Binary-Value = %x00 *OCTET   ; a NUL byte, then the raw value bytes
 ```
 
-The sender MAY choose per header whether to use base64 or true binary.
+The sender MAY choose per header whether to use base64 or true binary. A sender
+MUST NOT send a `True-Binary-Value` unless the peer has advertised
+`GRPC_ALLOW_TRUE_BINARY_METADATA = 1`.
 
 The receiver tells the two encodings apart by the first byte:
 

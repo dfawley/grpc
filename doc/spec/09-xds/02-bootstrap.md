@@ -25,6 +25,11 @@ this order of precedence:
 2. **`GRPC_XDS_BOOTSTRAP_CONFIG`**: if this environment variable is set (and
    `GRPC_XDS_BOOTSTRAP` is not), its value is the bootstrap JSON itself.
 
+A variable counts as set whenever it is defined in the environment, even if its
+value is the empty string. An empty `GRPC_XDS_BOOTSTRAP` is a file path that
+cannot be read, and an empty `GRPC_XDS_BOOTSTRAP_CONFIG` is invalid bootstrap
+JSON; in either case gRPC MUST NOT fall through to the next source.
+
 Implementations MAY provide programmatic ways for an application to supply the
 bootstrap configuration, for example for the whole process or for a specific
 xDS-enabled channel or server. The precedence of a programmatic configuration
@@ -38,7 +43,8 @@ or the xDS-enabled server) reports the failure (see [Client](05-client.md)
 and [xDS-Enabled Servers](08-server.md)).
 
 The process-wide bootstrap configuration is read and parsed when the first
-XdsClient that needs it is created. It MAY be cached for the life of the
+XdsClient that needs it is created; the environment variables MAY be read
+earlier, at process initialization. It MAY be cached for the life of the
 process, so later changes to the environment variables or to the file might
 not take effect.
 
@@ -51,20 +57,48 @@ with an error that describes every validation failure found.
 - **Unknown fields MUST be ignored** at every level, so that older clients
   keep working with newer bootstrap files.
 - A field that is present but has the wrong JSON type is a validation error.
-- Duration fields use the JSON form of `google.protobuf.Duration` (for
-  example, `"600s"`).
+- Duration fields use the Duration string format (for example, `"600s"`; see
+  [Introduction and Conventions: Notational Conventions](../00-introduction/README.md#7-notational-conventions)).
 
 ## 3. Top-Level Fields
 
-| Field | Type | Required | Semantics |
-| --- | --- | --- | --- |
-| `xds_servers` | array of [XdsServer](#41-xdsserver-object) | Yes; MUST be non-empty | The default xDS servers, in priority order (first is highest). Used for old-style (non-`xdstp:`) resource names and for every authority that does not set its own `xds_servers`. All entries are used for fallback (see [XdsClient](03-xds-client.md)). |
-| `node` | [Node](#42-node-object) object | No | Identifies this gRPC instance to the xDS servers. |
-| `authorities` | map from authority name (string) to [Authority](#43-authority-object) | No | Config for each authority used in `xdstp:` resource names. A new-style name with an empty authority uses the key `""`. Using an `xdstp:` name whose authority is not in this map is an error (see [XdsClient](03-xds-client.md)). |
-| `client_default_listener_resource_name_template` | string | No; default `"%s"` (also used if the value is empty) | Template for the client Listener resource name when the channel's `xds` target URI has no authority. Every `%s` is replaced by the target's service authority: the URI path with any leading `/` removed. If the template starts with `xdstp:`, the replacement is percent-encoded first (see [XdsClient](03-xds-client.md)), and the authority of the resulting name selects the entry in `authorities`. If the result does not start with `xdstp:`, the name is old-style and the top-level `xds_servers` are used. |
-| `server_listener_resource_name_template` | string | No; no default | Template for the Listener resource name that an xDS-enabled server watches for each listening address. Every `%s` is replaced by the listening address in `IP:port` form (for example, `0.0.0.0:8080` or `[::]:8080`). If the template starts with `xdstp:`, the replacement is percent-encoded first, and the authority of the resulting name selects the entry in `authorities`. Otherwise no special character handling is done. If the field is unset, xDS-enabled servers cannot be used (see [xDS-Enabled Servers](08-server.md)). |
-| `certificate_providers` | map from instance name (string) to [CertificateProvider](#44-certificate-provider-instances) | No | Certificate provider plugin instances that xDS security config can refer to by instance name (see [xDS Security](09-security.md)). |
-| `allowed_grpc_services` | map from target URI (string) to [AllowedGrpcService](#45-allowed-grpc-service-object) | No | The side-channel gRPC services that xDS servers without the `trusted_xds_server` feature may configure through the xDS `GrpcService` message, and the credentials to use for each (see [Allowed gRPC Service Object](#45-allowed-grpc-service-object)). |
+```json
+{
+  "xds_servers": [
+    {
+      "server_uri": "xds.example.com:443",
+      "channel_creds": [ { "type": "tls" } ]
+    }
+  ],
+  "node": { "id": "node-1" },
+  "authorities": {
+    "traffic-director.example.com": {}
+  },
+  "client_default_listener_resource_name_template": "%s",
+  "server_listener_resource_name_template": "grpc/server?xds.resource.listening_address=%s",
+  "certificate_providers": {
+    "default_cert": {
+      "plugin_name": "file_watcher",
+      "config": { "ca_certificate_file": "/etc/certs/ca.pem" }
+    }
+  },
+  "allowed_grpc_services": {
+    "dns:///rls.example.com:443": {
+      "channel_creds": [ { "type": "tls" } ]
+    }
+  }
+}
+```
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `xds_servers` | list of [XdsServer](#41-xdsserver-object) | Yes | — | MUST be non-empty. The default xDS servers, in priority order (first is highest). Used for old-style (non-`xdstp:`) resource names and for every authority that does not set its own `xds_servers`. All entries are used for fallback (see [XdsClient](03-xds-client.md)). |
+| `node` | [Node](#42-node-object) object | No | `{}` | Identifies this gRPC instance to the xDS servers. |
+| `authorities` | map of string → [Authority](#43-authority-object) | No | `{}` | Config for each authority used in `xdstp:` resource names. A new-style name with an empty authority uses the key `""`. Using an `xdstp:` name whose authority is not in this map is an error (see [XdsClient](03-xds-client.md)). |
+| `client_default_listener_resource_name_template` | string | No | `"%s"` | Template for the client Listener resource name when the channel's `xds` target URI has no authority (also `"%s"` if the value is empty). Every `%s` is replaced by the target's service authority: the URI path with any leading `/` removed. If the template starts with `xdstp:`, the replacement is percent-encoded first (see [XdsClient](03-xds-client.md)), and the authority of the resulting name selects the entry in `authorities`. If the result does not start with `xdstp:`, the name is old-style and the top-level `xds_servers` are used. |
+| `server_listener_resource_name_template` | string | No | Unset | Template for the Listener resource name that an xDS-enabled server watches for each listening address. Every `%s` is replaced by the listening address in `IP:port` form (for example, `0.0.0.0:8080` or `[::]:8080`). If the template starts with `xdstp:`, the replacement is percent-encoded first, and the authority of the resulting name selects the entry in `authorities`. Otherwise no special character handling is done. If the field is unset, xDS-enabled servers cannot be used (see [xDS-Enabled Servers](08-server.md)). |
+| `certificate_providers` | map of string → [CertificateProvider](#44-certificate-provider-instances) | No | `{}` | Certificate provider plugin instances that xDS security config can refer to by instance name (see [xDS Security](09-security.md)). |
+| `allowed_grpc_services` | map of string → [AllowedGrpcService](#45-allowed-grpc-service-object) | No | `{}` | The side-channel gRPC services that xDS servers without the `trusted_xds_server` feature may configure through the xDS `GrpcService` message, and the credentials to use for each (see [Allowed gRPC Service Object](#45-allowed-grpc-service-object)). |
 
 ## 4. Object Definitions
 
@@ -75,12 +109,29 @@ in the top-level `xds_servers`, in an authority's `xds_servers`, and inside
 LB policy config that names an LRS server (see
 [xDS LB Policies](06-lb-policies.md)).
 
-| Field | Type | Required | Semantics |
-| --- | --- | --- | --- |
-| `server_uri` | string | Yes | gRPC target URI of the xDS server, used to create the xDS channel. Any resolver scheme that gRPC supports may be used. |
-| `channel_creds` | array of `{ "type": string, "config": object }` | Yes; MUST contain at least one supported type | Channel credentials for the xDS channel. gRPC uses the **first** entry whose `type` it supports and ignores unsupported types. `type` is required in every entry. `config` is optional and defaults to an empty object. The selected entry (the first with a supported type) MUST have a `config` that is valid for that type, or the bootstrap is invalid; gRPC does not fall through to a later entry. Entries after the selected one are not validated. If no entry has a supported type, the bootstrap is invalid. |
-| `call_creds` | array of `{ "type": string, "config": object }` | No | Call credentials for RPCs on the xDS channel. Unlike `channel_creds`, gRPC applies **every** entry whose `type` it supports, and ignores unsupported types. If the field is missing or has no supported entry, no call credentials are used. Call credential types are a separate namespace from channel credential types. Every entry with a supported type MUST have a valid `config`, or the bootstrap is invalid. |
-| `server_features` | array | No | Server features (see [Server Features](#5-server-features)). Entries that are not strings, and strings that are not recognized, MUST be ignored. |
+```json
+{
+  "server_uri": "xds.example.com:443",
+  "channel_creds": [
+    { "type": "tls", "config": {} }
+  ],
+  "call_creds": [
+    { "type": "jwt_token_file", "config": { "jwt_token_file": "/var/run/secrets/token" } }
+  ],
+  "server_features": [ "trusted_xds_server" ]
+}
+```
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `server_uri` | string | Yes | — | gRPC target URI of the xDS server, used to create the xDS channel. Any resolver scheme that gRPC supports may be used. |
+| `channel_creds` | list of object | Yes | — | MUST contain at least one supported type. Channel credentials for the xDS channel. gRPC uses the **first** entry whose `type` it supports and ignores unsupported types. If the selected entry's `config` is invalid, the bootstrap is invalid; gRPC does not fall through to a later entry, and entries after the selected one are not validated. |
+| `channel_creds[].type` | string | Yes | — | Channel credential type name. |
+| `channel_creds[].config` | object | No | `{}` | Type-specific channel credential configuration. |
+| `call_creds` | list of object | No | `[]` | Call credentials for RPCs on the xDS channel. Unlike `channel_creds`, gRPC applies **every** entry whose `type` it supports and ignores unsupported types. Call credential types are a separate namespace from channel credential types. Every entry with a supported type MUST have a valid `config`, or the bootstrap is invalid. |
+| `call_creds[].type` | string | Yes | — | Call credential type name. |
+| `call_creds[].config` | object | No | `{}` | Type-specific call credential configuration. |
+| `server_features` | list | No | `[]` | Server features (see [Server Features](#5-server-features)). Entries that are not strings, and strings that are not recognized, MUST be ignored. |
 
 Two XdsServer entries are **the same server** when their `server_uri`,
 selected channel credentials (type and config), applied call credentials
@@ -88,22 +139,33 @@ selected channel credentials (type and config), applied call credentials
 The XdsClient uses this identity to share channels (see
 [XdsClient](03-xds-client.md)).
 
-#### Channel credential types
+**Channel credential types.**
+
+> **Introduced by:** [gRFC A65: xDS Bootstrap TLS Channel Credentials](https://github.com/grpc/proposal/blob/master/A65-xds-bootstrap-tls-creds.md) (`tls`)
 
 | `type` | Config | Semantics |
 | --- | --- | --- |
-| `insecure` | none | Plaintext (no transport security). |
-| `google_default` | none | Google default credentials. |
+| `insecure` | `{}` | Plaintext (no transport security). |
+| `google_default` | `{}` | Vendor-specific: Google default credentials, as specified in [Google Default Credentials](../10-vendor-specific/01-google-default-credentials.md). Implementations MAY support this type. |
 | `tls` | see below | TLS, or mTLS when an identity certificate is configured. Certificate files are reloaded periodically. |
 
-`tls` config fields:
+`tls` config:
 
-| Field | Type | Required | Semantics |
-| --- | --- | --- | --- |
-| `ca_certificate_file` | string | No | Path to a PEM file of CA certificates used to verify the server. If unset, the system root certificates are used. |
-| `certificate_file` | string | No | Path to a PEM identity certificate (chain). If set, mTLS is used. |
-| `private_key_file` | string | No | Path to the PEM private key for `certificate_file`. |
-| `refresh_interval` | Duration | No; default `"600s"` | How often to re-read the files. |
+```json
+{
+  "ca_certificate_file": "/etc/certs/ca.pem",
+  "certificate_file": "/etc/certs/client.pem",
+  "private_key_file": "/etc/certs/client.key",
+  "refresh_interval": "600s"
+}
+```
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `ca_certificate_file` | string | No | Unset | Path to a PEM file of CA certificates used to verify the server. If unset, the system root certificates are used. |
+| `certificate_file` | string | No | Unset | Path to a PEM identity certificate (chain). If set, mTLS is used. |
+| `private_key_file` | string | No | Unset | Path to the PEM private key for `certificate_file`. |
+| `refresh_interval` | Duration | No | `"600s"` | How often to re-read the files. |
 
 Validation for `tls`: `certificate_file` and `private_key_file` MUST be both
 set or both unset. Unlike the `file_watcher` certificate provider, the `tls`
@@ -112,13 +174,25 @@ type may leave all of `ca_certificate_file`, `certificate_file`, and
 roots. Implementations MAY use the `file_watcher` certificate provider
 internally to reload the files.
 
-#### Call credential types
+**Call credential types.**
 
 > **Introduced by:** [gRFC A97: xDS JWT Call Credentials](https://github.com/grpc/proposal/blob/master/A97-xds-jwt-call-creds.md)
 
-| `type` | Config | Semantics |
-| --- | --- | --- |
-| `jwt_token_file` | `{ "jwt_token_file": string }`. `jwt_token_file` is required. | JWT token file call credentials (see [Call Credentials](../06-security/03-call-credentials.md#5-jwt-token-file-credentials)). The token is read from the named file and sent in the `authorization` header as `Bearer <token>`. Implementations MAY support this type; an implementation that does not support it ignores the entry like any other unsupported type. |
+Implementations MAY support the `jwt_token_file` call credential type; an
+implementation that does not support it ignores the entry like any other
+unsupported type.
+
+`jwt_token_file` config:
+
+```json
+{
+  "jwt_token_file": "/var/run/secrets/token"
+}
+```
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `jwt_token_file` | string | Yes | — | Path to the file containing the JWT token (see [Call Credentials](../06-security/03-call-credentials.md#4-jwt-token-file-credentials)). The token is read from the named file and sent in the `authorization` header as `Bearer <token>`. |
 
 ### 4.2 Node Object
 
@@ -127,15 +201,33 @@ The `node` object supplies some of the fields of the xDS
 XdsClient sends that message in the first request on every ADS stream, and
 the LRS client sends it on every LRS stream.
 
-| Field | Type | Semantics |
-| --- | --- | --- |
-| `id` | string | Opaque identifier for this gRPC instance. Copied to `Node.id`. |
-| `cluster` | string | The local service cluster that this instance runs in. Copied to `Node.cluster`. |
-| `locality` | object with optional string fields `region`, `zone`, `sub_zone` | Where this instance runs. Copied to `Node.locality`. |
-| `metadata` | JSON object | Opaque metadata. Converted to the `google.protobuf.Struct` in `Node.metadata`. |
+```json
+{
+  "id": "projects/123/networks/default/nodes/abc",
+  "cluster": "my-service-cluster",
+  "locality": {
+    "region": "us-central1",
+    "zone": "us-central1-a",
+    "sub_zone": "rack1"
+  },
+  "metadata": {
+    "TRAFFICDIRECTOR_INTERCEPTION_PORT": "15001"
+  }
+}
+```
 
-All `node` fields are optional. gRPC itself fills in these `Node` fields, so
-they SHOULD NOT appear in the bootstrap. If they do appear, they are ignored:
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `id` | string | No | `""` | Opaque identifier for this gRPC instance. Copied to `Node.id`. |
+| `cluster` | string | No | `""` | The local service cluster that this instance runs in. Copied to `Node.cluster`. |
+| `locality` | object | No | Unset | Where this instance runs. Copied to `Node.locality`. |
+| `locality.region` | string | No | `""` | Locality region. |
+| `locality.zone` | string | No | `""` | Locality zone. |
+| `locality.sub_zone` | string | No | `""` | Locality sub-zone. |
+| `metadata` | object | No | Unset | Opaque metadata. Converted to the `google.protobuf.Struct` in `Node.metadata`. |
+
+gRPC itself fills in these `Node` fields, so they SHOULD NOT appear in the
+bootstrap. If they do appear, they are ignored:
 
 | `Node` field | Value |
 | --- | --- |
@@ -147,17 +239,26 @@ The deprecated `build_version` field is never sent.
 
 ### 4.3 Authority Object
 
-> **Introduced by:** [gRFC A47: xDS Federation](https://github.com/grpc/proposal/blob/master/A47-xds-federation.md)
+> **Introduced by:** [gRFC A47: xDS Federation](https://github.com/grpc/proposal/blob/master/A47-xds-federation.md), [gRFC A95: xDS Endpoint Fallback](https://github.com/grpc/proposal/blob/master/A95-xds-endpoint-fallback.md)
 
-| Field | Type | Required | Semantics |
-| --- | --- | --- | --- |
-| `client_listener_resource_name_template` | string | No | Template for the client Listener resource name when a channel's `xds` target URI has this authority. Every `%s` is replaced by the percent-encoded service authority (see [XdsClient](03-xds-client.md)). If set to a non-empty value, it MUST start with `xdstp://<authority_name>/`, or the bootstrap is invalid. If unset or empty, it defaults to the value given below the table. |
-| `xds_servers` | array of [XdsServer](#41-xdsserver-object) | No | The xDS servers for this authority, in priority order. If unset or empty, the top-level `xds_servers` are used. A server listed under several authorities is the same server, and the XdsClient shares one ADS stream for all of them (see [XdsClient](03-xds-client.md)). |
-| `fallback_on_reachability_only` | bool | No; default `false` | If `true`, the XdsClient falls back to the next server for this authority whenever the current server is unreachable, even if every watched resource is already cached. If `false`, it falls back only when at least one watched resource is not cached (see [XdsClient](03-xds-client.md)). |
+```json
+{
+  "client_listener_resource_name_template": "xdstp://traffic-director.example.com/envoy.config.listener.v3.Listener/%s",
+  "xds_servers": [
+    {
+      "server_uri": "td.example.com:443",
+      "channel_creds": [ { "type": "tls" } ]
+    }
+  ],
+  "fallback_on_reachability_only": false
+}
+```
 
-If `client_listener_resource_name_template` is unset or empty, it defaults to
-`xdstp://<authority_name>/envoy.config.listener.v3.Listener/%s`, with
-`<authority_name>` percent-encoded as a URI authority.
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `client_listener_resource_name_template` | string | No | `xdstp://<authority_name>/envoy.config.listener.v3.Listener/%s` | Template for the client Listener resource name when a channel's `xds` target URI has this authority. Every `%s` is replaced by the percent-encoded service authority (see [XdsClient](03-xds-client.md)). If set to a non-empty value, it MUST start with `xdstp://<authority_name>/`, or the bootstrap is invalid. If unset or empty, it defaults to `xdstp://<authority_name>/envoy.config.listener.v3.Listener/%s`, with `<authority_name>` percent-encoded as a URI authority. |
+| `xds_servers` | list of [XdsServer](#41-xdsserver-object) | No | Top-level `xds_servers` | The xDS servers for this authority, in priority order. If unset or empty, the top-level `xds_servers` are used. A server listed under several authorities is the same server, and the XdsClient shares one ADS stream for all of them (see [XdsClient](03-xds-client.md)). |
+| `fallback_on_reachability_only` | bool | No | `false` | If `true`, the XdsClient falls back to the next server for this authority whenever the current server is unreachable, even if every watched resource is already cached. If `false`, it falls back only when at least one watched resource is not cached (see [XdsClient](03-xds-client.md)). |
 
 ### 4.4 Certificate Provider Instances
 
@@ -165,27 +266,39 @@ If `client_listener_resource_name_template` is unset or empty, it defaults to
 
 Each entry in `certificate_providers` maps an *instance name* (the name that
 xDS security config uses in `CertificateProviderPluginInstance.instance_name`)
-to:
+to a provider configuration object:
 
-| Field | Type | Required | Semantics |
-| --- | --- | --- | --- |
-| `plugin_name` | string | Yes | Name of the certificate provider plugin implementation. It MUST be a plugin that gRPC supports, or the bootstrap is invalid. |
-| `config` | object | No; default `{}` | Plugin-specific config. It MUST be valid for the plugin, or the bootstrap is invalid. |
+```json
+{
+  "plugin_name": "file_watcher",
+  "config": {
+    "certificate_file": "/etc/certs/cert.pem",
+    "private_key_file": "/etc/certs/key.pem",
+    "ca_certificate_file": "/etc/certs/ca.pem",
+    "refresh_interval": "600s"
+  }
+}
+```
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `plugin_name` | string | Yes | — | Name of the certificate provider plugin implementation. It MUST be a plugin that gRPC supports, or the bootstrap is invalid. |
+| `config` | object | No | `{}` | Plugin-specific config. It MUST be valid for the plugin, or the bootstrap is invalid. |
 
 An xDS resource that refers to an instance name not in this map is invalid
 (see [xDS Security](09-security.md)).
 
 <!-- REVIEW(divergence) [XDS_BOOTSTRAP-5]: The languages validate `certificate_providers` entries at different times. C++ (certificate_provider_store.cc) rejects the bootstrap for an unknown `plugin_name` or an invalid `config`, and treats a missing `config` as `{}`. Go (bootstrap.go UnmarshalJSON) skips entries with an unknown `plugin_name` ("We ignore plugins that we do not know about") and rejects the bootstrap for an invalid `config`. Java (BootstrapperImpl) requires `config` to be present but checks neither the plugin name nor the config at bootstrap time. Both are checked only when a resource first uses the instance (CertificateProviderStore throws "Provider not found"). Spec says: unknown plugin or invalid config makes the bootstrap invalid; `config` defaults to `{}`. -->
 
-#### `file_watcher` plugin
+**`file_watcher` plugin.**
 
 The only certificate provider plugin is `file_watcher`. It reads PEM files
 (`certificate_file`, `private_key_file`, `ca_certificate_file`) and an
 optional SPIFFE trust bundle map (`spiffe_trust_bundle_map_file`) from the
 local file system, and re-reads them every `refresh_interval` (default
 `"600s"`). Its config fields and validation rules are specified in
-[xDS Security](09-security.md). An invalid config makes the bootstrap
-invalid. Certificate provider behavior is specified in
+[xDS Security](09-security.md#51-file_watcher-plugin). An invalid config makes
+the bootstrap invalid. Certificate provider behavior is specified in
 [TLS](../06-security/02-tls.md).
 
 ### 4.5 Allowed gRPC Service Object
@@ -193,12 +306,24 @@ invalid. Certificate provider behavior is specified in
 > **Introduced by:** [gRFC A102: xDS `GrpcService` Support and Header Representations](https://github.com/grpc/proposal/blob/master/A102-xds-grpc-service.md)
 
 Each entry in `allowed_grpc_services` maps a fully qualified gRPC target URI
-(for example, `dns:///ratelimit.example.org:443`) to:
+(for example, `dns:///ratelimit.example.org:443`) to a service credentials
+object:
 
-| Field | Type | Required | Semantics |
-| --- | --- | --- | --- |
-| `channel_creds` | array of `{ "type": string, "config": object }` | Yes; MUST contain at least one supported type | Channel credentials for the side channel to this target. Same format, selection, and validation rules as `channel_creds` in an [XdsServer](#41-xdsserver-object). |
-| `call_creds` | array of `{ "type": string, "config": object }` | No | Call credentials for RPCs on the side channel. Same format, selection, and validation rules as `call_creds` in an [XdsServer](#41-xdsserver-object). |
+```json
+{
+  "channel_creds": [
+    { "type": "tls", "config": {} }
+  ],
+  "call_creds": [
+    { "type": "jwt_token_file", "config": { "jwt_token_file": "/var/run/secrets/token" } }
+  ]
+}
+```
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `channel_creds` | list of object | Yes | — | MUST contain at least one supported type. Channel credentials for the side channel to this target. Same format, selection, and validation rules as `channel_creds` in an [XdsServer](#41-xdsserver-object). |
+| `call_creds` | list of object | No | `[]` | Call credentials for RPCs on the side channel. Same format, selection, and validation rules as `call_creds` in an [XdsServer](#41-xdsserver-object). |
 
 An entry whose value is not an object, or that fails the rules above, makes
 the bootstrap invalid.
@@ -209,13 +334,13 @@ feature ([Server Features](#5-server-features)):
 
 - If the `GrpcService` target URI is not a key in the map, the
   `GrpcService` is invalid, and the resource that contains it is NACKed.
-- If it is a key, the `GrpcService` is valid, but gRPC ignores the
-  credentials in the `GrpcService` and uses the `channel_creds` and
-  `call_creds` from the map entry instead.
+- If it is a key, the `GrpcService` is valid, but gRPC MUST ignore the
+  credentials and `initial_metadata` in the `GrpcService` and use the
+  `channel_creds` and `call_creds` from the map entry instead.
 
 For a `GrpcService` from an xDS server that lists `trusted_xds_server`, gRPC
-uses the target URI and credentials from the `GrpcService` itself, and the
-map is not consulted.
+uses the target URI, credentials, and `initial_metadata` from the
+`GrpcService` itself, and the map is not consulted.
 
 ## 5. Server Features
 
@@ -226,9 +351,8 @@ only to the XdsServer entry that lists it.
 | --- | --- |
 | `fail_on_data_errors` | Tells gRPC that it cannot rely on this server's operators to be alerted to data errors. When a data error happens for a resource that is already cached (a NACK of a new version, an LDS or CDS resource deletion, or a server-reported resource error with status NOT_FOUND or PERMISSION_DENIED), the XdsClient drops the cached resource and reports the error to watchers as a resource error. Without this feature, the XdsClient keeps the cached resource and reports the error as an ambient error. See [XdsClient](03-xds-client.md). |
 | `resource_timer_is_transient_error` | The does-not-exist timer for resources fetched from this server is 30 seconds instead of 15. When it fires, the cache entry goes to state `TIMEOUT` and watchers get an UNAVAILABLE error, instead of state `DOES_NOT_EXIST` and NOT_FOUND. Use this only with servers known to report missing resources explicitly through per-resource errors. Otherwise, clients take longer to notice a resource that does not exist. |
-| `trusted_xds_server` | Marks the server as trusted for security-sensitive features. This means that `RouteAction.auto_host_rewrite` in RDS resources from this server is honored (authority rewriting; see [RDS](04-resources/03-route-configuration.md) and [Client](05-client.md)). If the feature is absent, that field is ignored. |
+| `trusted_xds_server` | Marks the server as trusted for security-sensitive features. When present, `RouteAction.auto_host_rewrite` in RDS resources from this server is honored (authority rewriting; see [RDS](04-resources/03-route-configuration.md) and [Client](05-client.md)), and `GrpcService` messages from this server are used directly (target URI, credentials, and `initial_metadata`) without consulting `allowed_grpc_services` ([Allowed gRPC Service Object](#45-allowed-grpc-service-object)). If the feature is absent, `auto_host_rewrite` is ignored and `GrpcService` messages are restricted by `allowed_grpc_services`. |
 | `ignore_resource_deletion` | Recognized but has **no effect**. By default, LDS and CDS deletions of cached resources are already treated as ambient errors (unless `fail_on_data_errors` is set). |
-| `xds_v3` | Recognized but has **no effect**. gRPC always uses xDS v3. |
 
 ## 6. API Requirements
 

@@ -102,7 +102,7 @@ flowchart TD
     RL --> PK["LB picker: Complete / Queue / Fail / Drop"]
     PK -->|"Complete"| SC["Subchannel"]
     SC --> CC["Call credentials: per-attempt metadata"]
-    CC --> TR["Transport stream (HTTP/2)"]
+    CC --> TR["Transport stream (HTTP/2, HTTP/3, in-process)"]
     TR --> Srv["Server"]
 
     subgraph ControlPlane["Control plane"]
@@ -175,8 +175,8 @@ incoming calls to registered handlers. See [Server](../05-server/README.md).
 
 ```mermaid
 flowchart TD
-    L["Listener (TCP / Unix socket)"] --> H["Handshake: server credentials (TLS, insecure, xDS)"]
-    H --> T["Transport (HTTP/2): connection management, keepalive, limits"]
+    L["Listener / transport endpoint (TCP, Unix socket, VSOCK, UDP/QUIC, in-process)"] --> H["Handshake: server credentials (TLS, insecure, xDS)"]
+    H --> T["Transport (HTTP/2, HTTP/3, in-process): connection management, keepalive, limits"]
     T --> S["Stream = incoming call"]
     S --> SI["Server interceptors (incl. authorization)"]
     SI --> D["Method dispatch by full method name"]
@@ -217,15 +217,17 @@ interchangeable.
 |-----------------|-------------|--------------|
 | Name resolvers | Target URI scheme; registry keyed by scheme | [Name Resolution](../04-client-channel/03-name-resolution.md) |
 | LB policies | `loadBalancingConfig` in the service config; registry keyed by policy name | [Load Balancing](../04-client-channel/06-load-balancing.md) |
+| HTTP CONNECT proxy mappers | Environment or application configuration | [HTTP CONNECT Proxy](../04-client-channel/09-proxy.md) |
 | Channel and server credentials | Application, at channel or server creation | [Security](../06-security/README.md) |
-| Certificate providers | Credentials configuration (for example, xDS bootstrap `certificate_providers`) | [TLS](../06-security/02-tls.md) |
+| Certificate providers, CRL providers, custom certificate verifiers, private-key signers | Credentials configuration (for example, xDS bootstrap `certificate_providers`) | [TLS](../06-security/02-tls.md) |
 | Call credentials | Application, per channel or per call | [Call Credentials](../06-security/03-call-credentials.md) |
 | Codecs | Method definition or per call; identified by content-subtype | [Core RPC Semantics: Codecs and Content-Subtype](../02-rpc-semantics/README.md#17-codecs-and-content-subtype) |
 | Compressors | Registry keyed by `grpc-encoding` name; per channel, call, or message | [Core RPC Semantics: Compression](../02-rpc-semantics/README.md#13-compression) |
 | Client and server interceptors | Application, per channel or server; also per call through the ConfigSelector | [Core RPC Semantics: Interceptors](../02-rpc-semantics/README.md#16-interceptors) |
 | Instrumentation and observability plugins (call/attempt/server tracers, metrics recorders, tracing) | Application, globally or per channel or server | [Instrumentation Architecture](../08-observability/02-instrumentation.md), [Metrics Framework and OpenTelemetry Plugin](../08-observability/03-metrics-framework.md), [Tracing](../08-observability/05-tracing.md) |
+| Binary log sinks | Environment or application configuration | [Binary Logging](../08-observability/07-binary-logging.md) |
 | Audit loggers | Authorization policy configuration | [Authorization](../06-security/04-authorization.md) |
-| xDS HTTP filters, LB policy types, cluster types | xDS configuration; registries keyed by extension type URL | [xDS HTTP Filters](../09-xds/07-http-filters.md), [xDS LB Policies](../09-xds/06-lb-policies.md) |
+| xDS HTTP filters, LB policy types, cluster types, cluster specifier plugins | xDS configuration; registries keyed by extension type URL | [xDS HTTP Filters](../09-xds/07-http-filters.md), [xDS LB Policies](../09-xds/06-lb-policies.md), [RouteConfiguration](../09-xds/04-resources/03-route-configuration.md) |
 
 ## 6. Where xDS Fits
 

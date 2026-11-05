@@ -20,10 +20,10 @@ sets refer to the defaults in [Metrics Framework and OpenTelemetry Plugin](03-me
 | --- | --- | --- |
 | `grpc.method` | Fully-qualified method name without the leading `/`, e.g. `google.bigtable.v2.Bigtable/CheckAndMutateRow`. Generic (unregistered) methods are recorded as `other` unless the application's generic method attribute predicate allows them. | Per-call client and server metrics, retry metrics |
 | `grpc.status` | Status code name, e.g. `OK`, `CANCELLED`, `DEADLINE_EXCEEDED` (see [Core RPC Semantics](../02-rpc-semantics/README.md)). On the client it is the status the attempt or call ended with, whether received from the server or generated locally. On the server it is the status sent. For TLS offload metrics, it is the result of the offloaded operation. | Attempt, call, and server metrics; TLS offload metrics |
-| `grpc.target` | Canonical target URI of the channel (see [Metrics Framework and OpenTelemetry Plugin](03-metrics-framework.md)). For XdsClient metrics on servers, the value is `#server`. | All client-side metrics |
+| `grpc.target` | Canonical target URI of the channel (see [Metrics Framework and OpenTelemetry Plugin](03-metrics-framework.md)). For XdsClient metrics on servers, the value is `#server`. | All client-side metrics except [TCP Metrics](#10-tcp-metrics) |
 | `grpc.lb.locality` | `{region="${REGION}", zone="${ZONE}", sub_zone="${SUB_ZONE}"}` with the xDS locality values substituted. Empty string if no locality is known. | Attempt metrics, WRR, subchannel, TLS client metrics |
 | `grpc.lb.backend_service` | The backend service the traffic is sent to. This matters when one channel target can route to different sets of servers. With xDS it is the (leaf) cluster name. Empty string if not applicable. | Attempt metrics, WRR, outlier detection, subchannel, TLS client metrics |
-| `grpc.client.call.custom` | The application-supplied custom telemetry label of the call (see [Instrumentation Architecture](02-instrumentation.md)). Empty string if not set. **Experimental**, and never enabled by default. | All client per-call, per-attempt, and retry metrics |
+| `grpc.client.call.custom` | The application-supplied custom telemetry label of the call (see [Instrumentation Architecture](02-instrumentation.md)). Empty string if not set. **Experimental**, and never enabled by default. | All client per-call, per-attempt, and retry metrics; RLS pick metrics |
 | `grpc.security_level` | `none`, `integrity_only`, or `privacy_and_integrity` (see [Security Model: Security Levels](../06-security/01-security-model.md#5-security-levels)) | `grpc.subchannel.open_connections` |
 | `grpc.disconnect_error` | Reason for disconnection ([Subchannel Metrics](#4-subchannel-metrics)) | `grpc.subchannel.disconnections` |
 | `grpc.xds.server` | Target URI of the xDS server | XdsClient metrics |
@@ -34,6 +34,11 @@ sets refer to the defaults in [Metrics Framework and OpenTelemetry Plugin](03-me
 | `grpc.tls.handshake.resumed` | `FULL_HANDSHAKE` or `RESUMED_HANDSHAKE` | TLS handshake metrics |
 | `grpc.tls.private_key.offloader_name` | Low-cardinality string identifying the private key signer implementation, e.g. `HSM` | TLS offload metrics |
 | `grpc.tls.private_key_algorithm` | Signing algorithm enum string, e.g. `RsaPkcs1Sha256` | TLS offload metrics |
+
+Metric-family-specific labels for RLS, outlier detection, and TCP metrics are
+defined in [RLS LB Policy Metrics](#8-rls-lb-policy-metrics),
+[Outlier Detection LB Policy Metrics](#9-outlier-detection-lb-policy-metrics),
+and [TCP Metrics](#10-tcp-metrics).
 
 The `grpc.lb.locality` and `grpc.lb.backend_service` values reach the metrics
 as follows:
@@ -158,7 +163,7 @@ each time it updates its scheduler.
 `weighted_target` parent, or the empty string if the attribute is unset.
 `grpc.lb.backend_service` is taken from the backend-service attribute, or the
 empty string if it is unset. The backend-service attribute is not specific to
-xDS. In this specification, only the xDS `cds` policy sets it.
+xDS; among built-in policies, only the xDS `cds` policy sets it.
 
 ## 6. XdsClient Metrics
 
@@ -326,7 +331,7 @@ that latencies are comparable across write sizes. The prefix and the
 | --- | --- | --- |
 | [0, 1 KiB) | Whole write | `1024` |
 | [1 KiB, 8 KiB) | First 1 KiB | `1024` |
-| [8 KiB, 64 KiB) | First 8 KiB | `8196` |
+| [8 KiB, 64 KiB) | First 8 KiB | `8192` |
 | [64 KiB, 256 KiB) | First 64 KiB | `65536` |
 | [256 KiB, 2 MiB) | First 256 KiB | `262144` |
 | [2 MiB, ∞) | First 2 MiB | `2097152` |

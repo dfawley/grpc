@@ -59,7 +59,9 @@ Keepalive has the same purpose and settings as in
 [HTTP/2 Server Transport: Liveness and Enforcement](02-http2.md#7-liveness-and-enforcement).
 HTTP/3 has no PING frame of its own. Keepalive MAY use QUIC PING frames
 ([RFC 9000 §19.2](https://www.rfc-editor.org/rfc/rfc9000#section-19.2)) or
-the QUIC idle timeout instead of HTTP/2 PING.
+the QUIC idle timeout instead of HTTP/2 PING. `TCP_USER_TIMEOUT` does not apply
+to HTTP/3, because QUIC runs over UDP and manages retransmission and loss
+detection itself.
 
 ## 6. API Requirements
 

@@ -18,8 +18,8 @@ flow control. It follows the structure of the
 
 ## 1. Overview
 
-An HTTP/2 client transport is one HTTP/2 connection, over TCP or a Unix
-domain socket, possibly through an
+An HTTP/2 client transport is one HTTP/2 connection, over TCP, a Unix domain
+socket, or another stream socket (such as VSOCK), possibly through an
 [HTTP CONNECT proxy](../09-proxy.md), and secured by the channel
 credentials' handshake. Each call attempt is one HTTP/2 stream.
 
@@ -149,11 +149,15 @@ connection-management level, when a client transport receives GOAWAY:
    reason for logging, channelz, and metrics (see
    [Observability](../../08-observability/README.md)).
 
-### 5.2 Connection Failure
+### 5.2 Connection Failure and Clean Closure
 
 How calls fail when the connection fails or closes with streams still open
 is specified in
 [Connection failure](../../03-wire-protocol/01-http2.md#94-connection-failure).
+When the client closes a connection cleanly (for example, on channel or
+subchannel shutdown), it SHOULD send `GOAWAY` with `NO_ERROR` before closing
+the underlying socket
+([RFC 9113 §6.8](https://www.rfc-editor.org/rfc/rfc9113#section-6.8)).
 The transport tells the subchannel that the connection has closed, separately
 from the GOAWAY notification in [Handling GOAWAY](#51-handling-goaway).
 

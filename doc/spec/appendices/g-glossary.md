@@ -21,15 +21,15 @@ nonce, and for a NACK, an error detail. gRPC NACKs per resource and still
 uses the valid resources in a response. See
 [XdsClient](../09-xds/03-xds-client.md) ([Version, nonce, ACK, and NACK](../09-xds/03-xds-client.md#44-version-nonce-ack-and-nack)).
 
+**Address** — A network address that a subchannel can connect to, such as an
+IP address and port, or a Unix domain socket path. An endpoint has one or more
+addresses. See [Load Balancing](../04-client-channel/06-load-balancing.md) ([Load Balancing: Resolver Updates: Endpoints, Addresses, and Attributes](../04-client-channel/06-load-balancing.md#3-resolver-updates-endpoints-addresses-and-attributes)).
+
 **ADS (Aggregated Discovery Service)** — The xDS transport service
 (`envoy.service.discovery.v3.AggregatedDiscoveryService`) that carries all
 resource types on one bidirectional stream per xDS server. gRPC uses its
 state-of-the-world variant. See [Architecture and Design Principles](../09-xds/01-architecture.md) ([Architecture and Design Principles: Transport protocol variant](../09-xds/01-architecture.md#21-transport-protocol-variant)) and
 [XdsClient](../09-xds/03-xds-client.md) ([XdsClient: ADS Stream](../09-xds/03-xds-client.md#4-ads-stream)).
-
-**Address** — A network address that a subchannel can connect to, such as an
-IP address and port, or a Unix domain socket path. An endpoint has one or more
-addresses. See [Load Balancing](../04-client-channel/06-load-balancing.md) ([Load Balancing: Resolver Updates: Endpoints, Addresses, and Attributes](../04-client-channel/06-load-balancing.md#3-resolver-updates-endpoints-addresses-and-attributes)).
 
 **Admin interface** — A single API that registers the standard admin
 services (channelz and CSDS) on a server. See
@@ -40,6 +40,11 @@ list of other clusters. Each underlying cluster becomes one priority. See
 [Cluster](../09-xds/04-resources/04-cluster.md) ([Aggregate Clusters](../09-xds/04-resources/04-cluster.md#13-aggregate-clusters)) and
 [Client Data Plane](../09-xds/05-client.md) ([Aggregate cluster graph](../09-xds/05-client.md#23-aggregate-cluster-graph)).
 
+**ALTS (Application Layer Transport Security)** — A transport security
+mechanism that mutually authenticates workloads by service account through a
+local handshaker service and protects data with the ALTS record protocol. See
+[ALTS](../06-security/05-alts.md).
+
 **Ambient error** — An error reported to an xDS watcher that does not change
 the watcher's use of a resource it already has. Examples are losing contact
 with the xDS server, or a NACK of an update to a cached resource. It is
@@ -49,6 +54,13 @@ delivered through `OnAmbientError`. Contrast with *resource error*. See
 **API Requirements** — The subsection of each section that states what
 gRPC's public API (or an internal plugin API) MUST let applications do,
 in abstract form. See [Introduction and Conventions](../00-introduction/README.md) ([Introduction and Conventions: API Requirements](../00-introduction/README.md#5-api-requirements)).
+
+**Application Default Credentials (ADC)** — Google's standard procedure
+for finding a process's Google credentials (an environment variable, a
+well-known file, or the GCP metadata server). Google default credentials use
+it for their call credentials. See
+[Google Call Credentials](../10-vendor-specific/05-google-call-credentials.md) ([Application Default Credentials](../10-vendor-specific/05-google-call-credentials.md#2-application-default-credentials))
+and [Google Default Credentials](../10-vendor-specific/01-google-default-credentials.md) ([Application Default Credentials](../10-vendor-specific/01-google-default-credentials.md#31-application-default-credentials)).
 
 **Attempt (call attempt)** — One transmission of a call to a server on one
 transport stream. A call has one or more attempts: retries, hedging, and
@@ -212,6 +224,12 @@ with *transient error*. See [XdsClient](../09-xds/03-xds-client.md) ([Error cate
 as the relative `grpc-timeout`, and is enforced by both the client and the
 server. See [Core RPC Semantics](../02-rpc-semantics/README.md) ([Core RPC Semantics: Deadlines](../02-rpc-semantics/README.md#8-deadlines)).
 
+**DirectPath** — Direct connections from a client on Google Cloud Platform
+to Google service backends, configured through Google's xDS control plane
+and secured with ALTS. See
+[Google Cloud-to-Prod (`google-c2p`) Resolver](../10-vendor-specific/02-google-c2p-resolver.md) and
+[Google Default Credentials](../10-vendor-specific/01-google-default-credentials.md) ([Transport Selection](../10-vendor-specific/01-google-default-credentials.md#2-transport-selection)).
+
 **Does-not-exist timer** — A timer started when the XdsClient requests a
 resource that it does not have cached. If the resource has not arrived when the timer fires, the
 resource is treated as nonexistent (or, with
@@ -250,11 +268,24 @@ back when it recovers. See [XdsClient](../09-xds/03-xds-client.md) ([XdsClient: 
 Protocol Buffers, the service part is the fully qualified service name. See
 [Core RPC Semantics](../02-rpc-semantics/README.md) ([Core RPC Semantics: Services and Full Method Names](../02-rpc-semantics/README.md#22-services-and-full-method-names)).
 
+## G
+
+**Google default credentials** — Vendor-specific channel credentials for
+Google services that choose ALTS or TLS per connection and attach
+Application Default Credentials. See
+[Google Default Credentials](../10-vendor-specific/01-google-default-credentials.md).
+The vendor-specific call credentials for Google services are listed in
+[Google Call Credentials](../10-vendor-specific/05-google-call-credentials.md).
+
 ## H
 
 **Half-close** — The client signaling that it will send no more request
 messages (end of the request stream). See
 [Core RPC Semantics](../02-rpc-semantics/README.md) ([Core RPC Semantics: Calls](../02-rpc-semantics/README.md#3-calls)).
+
+**Handshaker service** — The local gRPC service
+(`grpc.gcp.HandshakerService`) that runs ALTS handshakes on behalf of a
+process. See [ALTS](../06-security/05-alts.md) ([Handshaker Service](../06-security/05-alts.md#2-handshaker-service)).
 
 **Happy Eyeballs** — The connection algorithm of `pick_first`, based on
 RFC 8305. Addresses
@@ -291,17 +322,17 @@ interceptors. See [Core RPC Semantics](../02-rpc-semantics/README.md) ([Core RPC
 
 ## L
 
-**LDS (Listener Discovery Service)** — The xDS resource type
-`envoy.config.listener.v3.Listener`. It is an API listener on clients and a
-socket listener on xDS-enabled servers. See
-[Listener](../09-xds/04-resources/02-listener.md) and
-[xDS-Enabled Servers](../09-xds/08-server.md).
-
 **LB policy (load balancing policy)** — A pluggable component that receives
 endpoints from the resolver, manages subchannels (directly or through child
 policies), aggregates connectivity state, and provides a picker. Policies are
 *leaf*, *parent*, or *petiole* policies. See
 [Load Balancing](../04-client-channel/06-load-balancing.md).
+
+**LDS (Listener Discovery Service)** — The xDS resource type
+`envoy.config.listener.v3.Listener`. It is an API listener on clients and a
+socket listener on xDS-enabled servers. See
+[Listener](../09-xds/04-resources/02-listener.md) and
+[xDS-Enabled Servers](../09-xds/08-server.md).
 
 **LEDS / LbEndpointCollection** — A resource
 (`envoy.config.endpoint.v3.LbEndpointCollection`) that holds a locality's
@@ -406,13 +437,16 @@ and optionally a ConfigSelector for a channel. See
 RouteConfiguration, Cluster, ClusterLoadAssignment, or LbEndpointCollection)
 that the XdsClient fetches, validates, and caches. Resource names are either
 old-style (opaque strings) or new-style (`xdstp:` URIs). See
-[XdsClient](../09-xds/03-xds-client.md) ([XdsClient: Resource Names](../09-xds/03-xds-client.md#3-resource-names), [XdsClient: Cache](../09-xds/03-xds-client.md#6-cache)) and the resource sections
-under 9.3.
+[XdsClient](../09-xds/03-xds-client.md) ([XdsClient: Resource Names](../09-xds/03-xds-client.md#3-resource-names), [XdsClient: Cache](../09-xds/03-xds-client.md#6-cache)), [Listener](../09-xds/04-resources/02-listener.md), [RouteConfiguration](../09-xds/04-resources/03-route-configuration.md), [Cluster](../09-xds/04-resources/04-cluster.md), and [ClusterLoadAssignment and LbEndpointCollection](../09-xds/04-resources/05-endpoint.md).
 
 **Resource error (xDS)** — An error delivered through
 `OnResourceChanged(error)`, after which the watcher MUST stop using any
 resource it has. Contrast with *ambient error*. See
 [XdsClient](../09-xds/03-xds-client.md) ([XdsClient: Watcher API](../09-xds/03-xds-client.md#5-watcher-api)).
+
+**Retry throttling** — A per-channel token bucket that disables retries and
+hedging when too many RPCs fail. See
+[Retries and Hedging](../04-client-channel/12-retries.md) ([Retries and Hedging: Retry Throttling](../04-client-channel/12-retries.md#4-retry-throttling)).
 
 **RLS (Route Lookup Service)** — An external lookup server that the
 [`rls`](../04-client-channel/lb-policies/rls.md) LB policy asks, through
@@ -420,10 +454,6 @@ the `grpc.lookup.v1.RouteLookupService/RouteLookup` RPC, which target an RPC
 should go to, based on a key built from the RPC's method and headers. With
 xDS, RLS is configured through the RLS cluster specifier plugin, and its
 targets are cluster names. See [`rls`](../04-client-channel/lb-policies/rls.md).
-
-**Retry throttling** — A per-channel token bucket that disables retries and
-hedging when too many RPCs fail. See
-[Retries and Hedging](../04-client-channel/12-retries.md) ([Retries and Hedging: Retry Throttling](../04-client-channel/12-retries.md#4-retry-throttling)).
 
 ## S
 

@@ -5,7 +5,7 @@
 
 # 2. Core RPC Semantics
 
-<!-- Sources: doc/PROTOCOL-HTTP2.md, doc/statuscodes.md, doc/status_ordering.md, doc/wait-for-ready.md, doc/fail_fast.md, doc/compression.md, doc/compression_cookbook.md, doc/internationalization.md, doc/http-grpc-status-mapping.md, doc/service_config.md, grpc-proto grpc/service_config/service_config.proto, A6, A31, A54 -->
+<!-- Sources: doc/PROTOCOL-HTTP2.md, doc/statuscodes.md, doc/status_ordering.md, doc/wait-for-ready.md, doc/fail_fast.md, doc/compression.md, doc/compression_cookbook.md, doc/internationalization.md, doc/http-grpc-status-mapping.md, doc/service_config.md, google/rpc/status.proto, A6, A31, A54, A81, G1 -->
 
 This section defines the semantics of gRPC RPCs independently of any
 transport. The mapping of these concepts onto HTTP/2 is defined in
@@ -78,11 +78,13 @@ full-method-name = full-service-name "/" short-method-name
 The **full service name** is defined by the IDL. For Protocol Buffers it is
 the package name, a `.`, and the service name, or only the service name if
 there is no package (see [Protocol Buffers Mapping](../03-wire-protocol/04-protobuf.md)). Full method
-names are case-sensitive. They MUST consist only of ASCII characters that are
-valid in HTTP/2 header values (see [Internationalization](#77-internationalization)). The
-short method name MUST NOT contain `/`. On HTTP/2 the full method name appears
-in the `:path` header as `/` + full method name. Features that match on method
-names, such as service config method matching, assume this form.
+names are case-sensitive. Both the full service name and the short method name
+MUST be non-empty, MUST NOT contain `/`, and MUST consist only of visible ASCII
+characters (`%x21`-`%x7E`; see [Internationalization](#77-internationalization)
+and [Call ABNF](#19-call-abnf)). On HTTP/2 the full
+method name appears in the `:path` header as `/` + full method name. Features
+that match on method names, such as service config method matching, assume
+this form.
 
 ## 3. Calls
 
@@ -247,8 +249,9 @@ headers, response headers, and trailers.
   applications to supply keys in canonical (lowercase) form.
 - Keys MUST consist only of the characters `0`-`9`, `a`-`z`, `_`, `-`, and
   `.` (after canonicalization). Keys MUST NOT be empty.
-- A key whose name ends in `-bin` is a **binary** key. All other keys are
-  **ASCII** keys.
+- A key whose name ends in `-bin` is a **binary** key and MUST have at least
+  one character before `-bin` (so bare `-bin` is not a valid key). All other
+  keys are **ASCII** keys.
 - Keys are unordered with respect to each other. The order of values for one
   key is preserved.
 
@@ -293,10 +296,15 @@ trailers-only response, the metadata is trailing metadata.
   explicitly allows applications to set. Implementations SHOULD NOT pass
   reserved keys used by the implementation itself (for example `grpc-timeout`,
   `grpc-encoding`, `grpc-status`, `grpc-message`) to the application as
-  metadata.
+  metadata, except as described in the next item.
 - Transport-level headers (for example HTTP/2 pseudo-headers, `content-type`,
-  `te`, and connection-specific headers) are not application metadata. The
-  rules for them are in [gRPC over HTTP/2](../03-wire-protocol/01-http2.md).
+  `te`, `user-agent`, and connection-specific headers) are not application
+  metadata: applications can't set them as metadata. Whether a server passes
+  the received `content-type`, `user-agent`, `:authority`, and
+  `grpc-accept-encoding` request headers, or other transport-level request
+  headers, to the application as metadata is implementation-defined. The
+  rules for these headers are in
+  [gRPC over HTTP/2](../03-wire-protocol/01-http2.md).
 - Every key with a gRPC-defined meaning is listed in
   [Appendix A](../appendices/a-metadata-keys.md).
 
@@ -327,13 +335,13 @@ A server that receives request headers over its limit SHOULD fail the call with
 `RESOURCE_EXHAUSTED`. A client that receives response headers or trailers over
 its limit SHOULD fail the call with `RESOURCE_EXHAUSTED`. Transport-level
 enforcement is specified in [HTTP/2 Client Transport: SETTINGS](../04-client-channel/08-transports/02-http2.md#22-settings) and
-[HTTP/2 Server Transport: SETTINGS](../05-server/02-transports/02-http2.md#21-settings).
+[HTTP/2 Server Transport: SETTINGS](../05-server/02-transports/02-http2.md#22-settings).
 
 ### 7.7 Internationalization
 
 | Element | Allowed content | Notes |
 |---------|-----------------|-------|
-| Method name | ASCII only; characters allowed in HTTP/2 header values | No encoding or decoding is applied. |
+| Method name | Visible ASCII (`%x21`-`%x7E`), excluding `/` within service or method names | No encoding or decoding is applied. |
 | Host name / authority | ASCII; internationalized names in punycode | The application is responsible for punycode-encoding an internationalized host name. |
 | Status message | Any Unicode string | Encoded on the wire as UTF-8 followed by percent-encoding (see [gRPC over HTTP/2](../03-wire-protocol/01-http2.md)). APIs SHOULD represent it as a Unicode string. |
 | Metadata key | As defined in [Keys](#71-keys) | |
@@ -353,10 +361,12 @@ The deadline used for a call is the earliest of:
 - the deadline set by the client application, if any;
 - the timeout from the call's per-call configuration, applied from the start of
   the call. This configuration is either the matching method config's
-  `timeout` field in the service config (`grpc/service_config/service_config.proto`,
-  a `google.protobuf.Duration`, JSON string such as `"1.5s"`) or a timeout
+  `timeout` field in the [service config](../04-client-channel/04-service-config.md#54-methodconfig)
+  (a `Duration` JSON string such as `"1.5s"`) or a timeout
   supplied by a ConfigSelector, such as the xDS route `max_stream_duration`
   (see [Per-call Configuration and Call Flow](../04-client-channel/05-call-dispatch.md) and [Client Data Plane](../09-xds/05-client.md)).
+
+<!-- REVIEW(divergence) [SERVICE_CONFIG-9]: Same question as [Per-call Configuration and Call Flow: Applying the Method Config](../04-client-channel/05-call-dispatch.md#32-applying-the-method-config). C++ anchors per-call configuration timeouts to call start; Java and Go start the timeout when per-call configuration is applied after name resolution. -->
 
 If only one is set, that one is used. If neither is set, the call has no
 deadline.
@@ -399,10 +409,12 @@ the language API has a way to express that context.
 ### 8.4 Deadline Expiry and Cancellation Races
 
 Client and server deadlines differ slightly, and their detection of expiry
-races. If a client receives a cancellation from the server (for example, an
-HTTP/2 `RST_STREAM` with `CANCEL`) on a call that has a deadline, it MUST check
-whether the deadline has passed. If it has, the client MUST report status
-`DEADLINE_EXCEEDED` instead of the cancellation status.
+races. If a client receives a transport-level stream cancellation from the
+server without trailers (for example, an HTTP/2 `RST_STREAM` with `CANCEL`; see
+[Communication and Enforcement](#82-communication-and-enforcement)) on a call
+that has a deadline, it MUST check whether the deadline has passed on the
+client. If it has, the client MUST report status `DEADLINE_EXCEEDED` instead of
+`CANCELLED`.
 
 ## 9. Authority
 
@@ -415,13 +427,28 @@ service. Transports that support virtual hosting MUST send the authority, and
 the server MUST make it available to the server application as part of the
 request headers. On HTTP/2 this is the `:authority` pseudo-header.
 
-By default the channel chooses the authority from the target (see
-[Channel](../04-client-channel/02-channel.md)). The client API MUST provide a way to
-override the authority per call. When the connection is secured, the
-overriding authority MUST, by default, be validated against the server's
-identity before the call is sent (credentials may provide an option to disable
-this check). If validation fails, the call fails with `UNAUTHENTICATED`. See
-[TLS: Per-RPC Authority Verification](../06-security/02-tls.md#4-per-rpc-authority-verification).
+The client API MUST provide a way to override the authority per call. A call's
+effective authority is chosen in order of precedence (see
+[Channel: Authority Overrides](../04-client-channel/02-channel.md#32-authority-overrides)):
+
+1. The per-call authority override set by the client application, if any.
+2. An authority override supplied for the call by the channel's load-balancing
+   policy picker, if any.
+3. The channel's default-authority override option, if set.
+4. An authority attached to the chosen address or endpoint as a resolver
+   attribute, if any.
+5. The resolver factory's default authority derived from the target URI (see
+   [Channel](../04-client-channel/02-channel.md)).
+
+When the connection uses credentials that perform hostname-based server
+identity verification (such as standard TLS), an overridden authority MUST, by
+default, be validated against the server's authenticated identity before the
+call is sent (credentials may provide an option to disable this check).
+Credentials that authenticate the peer by other means (such as control-plane
+SAN matching) do not perform hostname validation on the call's authority. If
+authority validation fails, the call fails with `UNAUTHENTICATED`. See
+[Security Model: Authority and Authority Override](../06-security/01-security-model.md#7-authority-and-authority-override)
+and [TLS: Per-RPC Authority Verification](../06-security/02-tls.md#4-per-rpc-authority-verification).
 
 ## 10. Status
 
@@ -483,8 +510,7 @@ gRPC implementations generate the following codes in the following cases:
 | Case | Code | Generated at |
 |------|------|--------------|
 | Client application cancelled the call | `CANCELLED` | Both |
-| Deadline expired before the server returned a status | `DEADLINE_EXCEEDED` | Both |
-| No response received before the deadline expired; either the client could not send the request or the server did not respond in time | `DEADLINE_EXCEEDED` | Both |
+| Deadline expired before the call completed (for example, the client could not send the request or did not receive a status in time, or the server deadline expired before trailers were sent) | `DEADLINE_EXCEEDED` | Both |
 | Method not found at the server | `UNIMPLEMENTED` | Server |
 | Server shutting down | `UNAVAILABLE` | Server |
 | Server application threw an exception or otherwise ended the call without supplying a status | `UNKNOWN` | Server |
@@ -497,12 +523,13 @@ gRPC implementations generate the following codes in the following cases:
 | Client does not have enough memory to hold the server response | `RESOURCE_EXHAUSTED` | Client |
 | Flow-control protocol violation | `INTERNAL` | Both |
 | Error parsing the returned status | `UNKNOWN` | Client |
-| Incorrect authentication metadata (credentials failed to get metadata, incompatible credentials set on channel and call, invalid host in `:authority`, and so on) | `UNAUTHENTICATED` | Both |
+| Invalid or unauthenticated peer or call credentials (for example, incompatible credentials set on channel and call, or per-RPC `:authority` validation failure; call-credential metadata failures follow [Status Codes from the Control Plane](#106-status-codes-from-the-control-plane)) | `UNAUTHENTICATED` | Both |
+| Control-plane component returned an inappropriate status code ([Status Codes from the Control Plane](#106-status-codes-from-the-control-plane)) | `INTERNAL` | Client |
 | Request cardinality violation (method requires exactly one request message, but the client sent a different number) | `INTERNAL` | Server |
 | Response cardinality violation (method requires exactly one response message, but the server sent a different number) | `INTERNAL` | Client |
 | Error parsing (deserializing) a response message | `INTERNAL` | Client |
 | Error parsing (deserializing) a request message | `INTERNAL` | Server |
-| Sent or received message was larger than the configured limit | `RESOURCE_EXHAUSTED` | Both |
+| Sent or received message, or received metadata list, was larger than the configured limit | `RESOURCE_EXHAUSTED` | Both |
 | Keepalive watchdog timed out | `UNAVAILABLE` | Both |
 | Connection failure, or failure to establish a connection, for a call that is not wait-for-ready | `UNAVAILABLE` | Client |
 
@@ -552,6 +579,8 @@ payloads in `google/rpc/error_details.proto`.
   and [Protocol Buffers Mapping: Rich Error Details](../03-wire-protocol/04-protobuf.md#4-rich-error-details)).
 
 ### 10.6 Status Codes from the Control Plane
+
+> **Introduced by:** [gRFC A54: Restrict Control-Plane Status Codes](https://github.com/grpc/proposal/blob/master/A54-restrict-control-plane-status-codes.md)
 
 Control-plane components (name resolvers, the service config, ConfigSelectors,
 LB policies, and call credentials) often talk to external services. Their
@@ -612,20 +641,28 @@ application. Service owners choose retryable codes for their methods; see
 
 ## 11. Ordering of Status, Reads, and Writes
 
-In this subsection, a "read" is the delivery of a response message to the client
-application (or of a request message to the server application). A "write" is
-the application sending a message. Implementations MUST follow these rules:
+In this subsection, on the client, a "read" is the delivery of a response
+message to the client application and a "write" is the client application
+sending a request message. On the server, a "read" is the delivery of a request
+message to the server handler and a "write" is the server handler sending a
+response message. Implementations MUST follow these rules:
 
-1. Reads and writes MUST NOT succeed after the status has been delivered to the
-   application.
-2. The status MUST be delivered only after all buffered messages have been read,
-   except as permitted by rule 5.
-3. Reads MAY continue to succeed after a write has failed. Once a write fails,
-   all later writes MUST fail. Once a read fails, all later reads MUST fail.
-4. A non-OK status received from the server is not an error status for the
-   purpose of rule 5. Messages that arrived before it are delivered normally.
-5. When the implementation knows of a locally generated error status (for
-   example, cancellation, deadline expiry, or a transport failure):
+1. **Client:** Reads and writes MUST NOT succeed after the final status has
+   been delivered to the client application. The status MUST be delivered only
+   after all buffered response messages have been read, except as permitted by
+   rule 5.
+2. **Server:** Writes MUST NOT succeed after the server handler has initiated
+   sending the final status (or returned from the handler). If the server sends
+   the final status early (before the client has half-closed), unread request
+   messages MAY be discarded.
+3. **Both sides:** Reads MAY continue to succeed after a write has failed. Once
+   a write fails, all later writes MUST fail. Once a read fails, all later
+   reads MUST fail.
+4. **Client:** A non-OK status received from the server is not a locally
+   generated error status for the purpose of rule 5. Response messages that
+   arrived before it MUST be delivered normally before the status.
+5. **Client:** When the implementation knows of a locally generated error
+   status (for example, cancellation, deadline expiry, or a transport failure):
    - if the application asks for the status, the implementation SHOULD discard
      messages that have been received but not yet delivered, and deliver the
      status;
@@ -642,21 +679,21 @@ support a maximum size for sent messages.
 
 | Limit | Default | Configured by |
 |-------|---------|---------------|
-| Maximum receive message size | 4 MiB (4194304 bytes) | Channel API and server API. On the client, also `maxResponseMessageBytes` in the method config. |
-| Maximum send message size | No limit | Channel API and server API. On the client, also `maxRequestMessageBytes` in the method config. |
+| Maximum receive message size | 4 MiB (4194304 bytes) | Channel API and server API. On the client, also `maxResponseMessageBytes` in the method config; implementations MAY also allow per-call configuration on the client. |
+| Maximum send message size | No limit | Channel API and server API. On the client, also `maxRequestMessageBytes` in the method config; implementations MAY also allow per-call configuration on the client. |
 
-On the client, when both the API and the method config (`grpc/service_config/service_config.proto`,
-`MethodConfig.max_request_message_bytes` / `max_response_message_bytes`, JSON
-`maxRequestMessageBytes` / `maxResponseMessageBytes`, `google.protobuf.UInt32Value`)
+On the client, when both the API (on the channel or per call)
+and the method config (`maxRequestMessageBytes` / `maxResponseMessageBytes` in
+[Service Config](../04-client-channel/04-service-config.md#54-methodconfig))
 set a limit, the smaller value applies. If only one is set, it applies. If
 neither is set, the default applies. The method config therefore never raises
 a limit the application set explicitly. A value of 0 is valid and allows only
 empty messages.
 
-<!-- REVIEW(divergence) [MESSAGE_SIZE-1]: Java has no channel-level or server-level maximum send message size. On the client it can be set only per call (CallOptions.withMaxOutboundMessageSize) or through the method config's maxRequestMessageBytes; ManagedChannelBuilder and ServerBuilder offer only maxInboundMessageSize, and the server never limits outgoing messages. C++ (GRPC_ARG_MAX_SEND_MESSAGE_LENGTH, ServerBuilder::SetMaxSendMessageSize) and Go (default call option MaxCallSendMsgSize, ServerOption MaxSendMsgSize) support both. Spec says: implementations MUST support a maximum size for sent messages, configured by the channel API and server API (and in Configuration API: the channel and server APIs MUST provide a way to set the maximum send message size). -->
-
 Sizes are measured on the serialized message. The limit is checked against the
-message as framed (after compression, if it is compressed). A receiver MUST
+message as framed (after compression, if it is compressed). A sender MUST NOT
+apply the send limit to the uncompressed size of a message it compresses. A
+receiver MUST
 also enforce the receive limit on the decompressed size of a compressed
 message, and MUST stop decompressing once the limit is exceeded.
 
@@ -689,8 +726,8 @@ compressed flag) are defined in [gRPC over HTTP/2](../03-wire-protocol/01-http2.
 | `gzip` | gzip ([RFC 1952](https://www.rfc-editor.org/rfc/rfc1952)) | |
 | `deflate` | The zlib format ([RFC 1950](https://www.rfc-editor.org/rfc/rfc1950)) with the deflate algorithm ([RFC 1951](https://www.rfc-editor.org/rfc/rfc1951)) | Raw deflate data without the zlib wrapper MUST NOT be sent. |
 
-Other algorithms are identified by other content-coding names. Applications
-MAY register custom compressors.
+Other algorithms are identified by other content-coding names. Implementations
+MAY let applications register custom compressors.
 
 ### 13.2 Negotiation
 
@@ -754,8 +791,9 @@ the outgoing channel's configuration applies.
 
 | Condition | Result |
 |-----------|--------|
-| Server receives a request whose `grpc-encoding` names an algorithm it does not support or has not enabled | Server fails the call with `UNIMPLEMENTED`. The status message says the algorithm is unsupported and lists the supported ones. The response MAY include `grpc-accept-encoding` listing the server's supported algorithms. If it does, the list MUST NOT include the one used. |
-| Client receives a message compressed with an algorithm it does not support or has not enabled | Client fails the call with `INTERNAL`. The status message says the algorithm is unsupported and lists the supported ones. |
+| Server receives a request whose `grpc-encoding` names an algorithm it does not support or has not enabled | Server fails the call with `UNIMPLEMENTED`. The status message SHOULD identify the unsupported algorithm and MAY list the supported ones. The response MAY include `grpc-accept-encoding` listing the server's supported algorithms. If it does, the list MUST NOT include the one used. |
+| Client receives a message compressed with an algorithm it does not support or has not enabled | Client fails the call with `INTERNAL`. The status message SHOULD identify the unsupported algorithm and MAY list the supported ones. |
+| Client receives response headers whose `grpc-encoding` names an algorithm it does not support or has not enabled | Whether the client fails the call with `INTERNAL` at this point, before any compressed message arrives, is implementation-defined. If it doesn't, the previous row applies when a compressed message arrives. |
 | A message has its compressed flag set, but the stream declared no algorithm other than `identity` | The receiver fails the call with `INTERNAL`. The status message describes the invalid compressed flag. |
 | Decompression fails although the algorithm is supported | The receiver fails the call with `INTERNAL`. |
 
@@ -795,8 +833,8 @@ In both modes:
 The value is set from these sources, highest precedence first:
 
 1. The value set by the client application for the call.
-2. The `waitForReady` field (`google.protobuf.BoolValue`) of the matching
-   method config in the service config.
+2. The `waitForReady` field of the matching method config in the
+   [service config](../04-client-channel/04-service-config.md#54-methodconfig).
 3. Default: `false`.
 
 Note: A value from the service config cannot affect a call that is waiting for
@@ -1051,7 +1089,7 @@ message-payload   = *OCTET             ; zero-length payloads are valid
 
 status            = status-code [status-message] [status-details]
 status-code       = <one of the codes in "Status Codes" above>
-status-message    = 1*<Unicode character>
+status-message    = *<Unicode character>
 status-details    = <serialized google.rpc.Status>
 ```
 
@@ -1065,6 +1103,11 @@ Notes:
   receiver may accept metadata values that contain bytes outside `SP / VCHAR`.
 - A server matches the full method name against its registered methods
   exactly and case-sensitively, without percent-decoding. A call whose full
-  method name is malformed (for example, missing the leading `/` on the wire,
-  or missing the `/` between the service and method names) or matches no
-  registered method fails with `UNIMPLEMENTED`.
+  method name matches no registered method goes to the server's
+  unknown-method handler if one is registered (see
+  [Server: Method Dispatch](../05-server/01-server.md#22-method-dispatch)), and
+  otherwise fails with `UNIMPLEMENTED`. A call whose full method name is
+  malformed (for example, missing the leading `/` on the wire, or missing the
+  `/` between the service and method names) fails with `UNIMPLEMENTED` when
+  no unknown-method handler handles it. Whether an unknown-method handler
+  receives such a call is implementation-defined.

@@ -5,7 +5,7 @@
 
 # 6.2 TLS
 
-<!-- Sources: A29 (generic certificate provider, SAN matching, file_watcher), A69, A81 (secure naming), A87, A101 (generic SNI parts), A107, A120, L127, doc/grpc_xds_bootstrap_format.md (file_watcher config), doc/ssl-performance.md (informative), include/grpc/grpc_security_constants.h -->
+<!-- Sources: A29 (generic certificate provider, SAN matching, file_watcher), A69, A81 (secure naming), A87, A101 (generic SNI parts), A107, A120, L127, doc/grpc_xds_bootstrap_format.md (file_watcher config), doc/ssl-performance.md (informative) -->
 
 This section specifies TLS channel and server credentials. The same TLS
 machinery underlies xDS credentials. For how xDS configures it, see
@@ -41,7 +41,9 @@ The client sends SNI in the ClientHello as follows:
    override.
 
 In every case, an IP address literal is not sent as SNI, as RFC 6066 §3
-requires. An empty name means no SNI.
+requires. If the name ends in a `.` (a fully qualified name such as
+`example.com.`), one trailing `.` is removed before it is sent, because
+RFC 6066 §3 forbids a trailing dot in SNI. An empty name means no SNI.
 
 Implementations MAY provide additional TLS credentials options that change
 the SNI or the name used for hostname verification. The behavior of such
@@ -66,7 +68,7 @@ for the handshake to succeed.
    configured, revocation checking ([Certificate Revocation (CRL)](#9-certificate-revocation-crl)) is part of this step.
 2. **Hostname verification.** The leaf certificate MUST match the *target
    name*. The target name is the channel's default authority with any port
-   removed. Matching follows RFC 9525 §6: an IP-address target name
+   removed and with one trailing `.`, if present, removed. Matching follows RFC 9525 §6: an IP-address target name
    is matched against IP-address SANs and any other target name against DNS
    SANs. Wildcard DNS SANs are accepted in the form RFC 9525 §6.3 permits (the
    whole left-most label). The subject CN SHOULD NOT be used for matching.
@@ -79,6 +81,8 @@ The TLS credentials API MUST let the application:
   verifier. This is dangerous. It MUST NOT be the default.
 
 ## 4. Per-RPC Authority Verification
+
+> **Introduced by:** [gRFC A81: xDS Authority Rewriting](https://github.com/grpc/proposal/blob/master/A81-xds-authority-rewriting.md)
 
 An RPC's `:authority` can differ from the name its connection was verified
 against: through a per-call authority override, or through xDS authority
@@ -117,6 +121,10 @@ A TLS server has a *client certificate request type*:
 | `REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_BUT_DONT_VERIFY` | Yes | Yes | No |
 | `REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_AND_VERIFY` | Yes | Yes | Yes |
 
+Implementations MAY express the two unverified modes (`..._BUT_DONT_VERIFY`) by
+pairing a client-certificate request/require setting with a trust configuration
+that skips chain verification, rather than as separate enum constants.
+
 "Verify" means chain verification against the server's root provider (or
 SPIFFE verification), plus revocation checking if configured. Hostname
 verification does not apply to client certificates. A server that verifies
@@ -124,6 +132,8 @@ client certificates MUST have roots configured: there is no default trust
 store for client certificates. The verified client certificate fills the
 server-side AuthContext (see
 [Security Model: AuthContext and Peer Identity](01-security-model.md#6-authcontext-and-peer-identity)).
+
+<!-- REVIEW(divergence) [TLS-20]: When a TLS server enables client-certificate verification (`REQUEST_..._AND_VERIFY`) without explicit root certificates, C++ fails credential/handshake setup because no default trust store is used for client certificates (`CreateRootCertsBundle` returns empty when no root provider is set), whereas Java (`TlsServerCredentials.Builder` -> `TrustManagerFactory.init((KeyStore) null)`) and Go (`crypto/tls` when `ClientCAs == nil` with `VerifyClientCertIfGiven` / `RequireAndVerifyClientCert`) fall back to the host OS default root CAs, accepting client certificates issued by public WebPKI CAs unless roots are configured explicitly. Decide whether to keep "there is no default trust store for client certificates" (filing Java/Go bugs) or allow implementations to fall back to system roots when none are configured while recommending explicit roots (`SHOULD`). -->
 
 A TLS server MUST have an identity (key and certificate chain). Server
 credentials creation MUST fail if no identity provider is configured.
@@ -328,6 +338,8 @@ The credentials have a policy for `Undetermined`: treat it as `Revoked` (fail
 closed) or as `Unrevoked` (fail open). The application MUST be able to choose.
 If any certificate in the chain ends up `Revoked`, the handshake fails.
 
+<!-- REVIEW(divergence) [TLS-21]: When the provider returns a CRL for the certificate's issuer but the CRL fails validation (issuer mismatch, missing `cRLSign`, bad signature), the spec maps the result to `Undetermined` ("no CRL could be validated"), which allows the connection under the fail-open policy. Go does the same (`checkCert` returns `RevocationUndetermined` when `fetchCRL`/`verifyCRL` fails). C++ fails the handshake (`CheckCertRevocation` returns 0 when `ValidateCrl` fails). Java does not implement gRFC A69 CRL providers. Decide whether a present-but-invalid CRL fails closed or maps to `Undetermined`. -->
+
 ```
 RevocationStatus Check(cert, issuer, opts):
   crl = opts.crlProvider.GetCrl(cert)
@@ -345,7 +357,7 @@ issuer):
 | RFC 5280 §6.3.3 step | gRPC behavior |
 |----------------------|---------------|
 | (a) Update local CRL cache | Not done by gRPC. The CRL provider supplies CRLs. Only complete CRLs are supported. A CRL past its `nextUpdate` time is still used. |
-| (b) Verify issuer and scope | The CRL issuer MUST equal the certificate's issuer, and the issuer certificate MUST have the `cRLSign` key usage bit set. Issuing distribution points are not supported. |
+| (b) Verify issuer and scope | The CRL issuer MUST equal the certificate's issuer, and if the issuer certificate contains a `KeyUsage` extension, it MUST have the `cRLSign` key usage bit set (RFC 5280 §6.3.3(f)). Issuing distribution points are not supported. |
 | (c) Delta CRLs | Not supported. |
 | (d), (e) Reasons mask | Not supported. |
 | (f) CRL issuer path | Not needed: only direct CRLs, so the CRL issuer is the certificate's issuer in the verified chain. |
@@ -368,7 +380,8 @@ any CRL cannot be parsed.
 The directory-reloading provider reads every file in a directory and parses
 each one as a CRL. It re-reads the directory periodically.
 
-Parameters: directory path, refresh interval, and an optional error callback.
+Parameters: directory path, refresh interval (MUST be at least **60 seconds**),
+and an optional error callback.
 
 - CRLs are indexed by issuer. File names carry no meaning.
 - The first read happens synchronously when the provider is created, so CRLs
@@ -433,19 +446,20 @@ The map file is JSON. gRPC supports a subset of the SPIFFE bundle format:
 }
 ```
 
-- `trust_domains` (required): an object mapping each trust domain name to a
-  JWK set. Each key MUST be a valid trust domain (rules above).
-- In each JWK set, only `keys` and `spiffe_sequence` are used. `keys` is
-  required.
-- In each key, only `kty`, `use`, and `x5c` are used:
-  - `use` MUST be `x509-svid`;
-  - `kty` MUST be `RSA` or `EC`;
-  - `x5c` MUST have exactly one element: a base64 DER certificate that parses
-    as exactly one X.509 certificate.
-- If any entry of a trust domain's bundle is invalid, the whole map is
-  invalid. gRPC does not skip individual bad JWK entries.
-- An empty `trust_domains` object is a valid, empty map. Every peer is then
-  rejected.
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `trust_domains` | map of string → object | Yes | — | Maps each trust domain name to its JWK set. Each key MUST be a valid trust domain (rules above). An empty `{}` map is valid and rejects every peer. |
+| `trust_domains{}.spiffe_sequence` | number | No | — | Sequence number of the trust bundle. |
+| `trust_domains{}.keys` | list of object | Yes | — | JWK entries for the trust domain. |
+| `trust_domains{}.keys[].kty` | string | Yes | — | Key type; MUST be `"RSA"` or `"EC"`. |
+| `trust_domains{}.keys[].use` | string | Yes | — | Key usage; MUST be `"x509-svid"`. |
+| `trust_domains{}.keys[].x5c` | list of string | Yes | — | MUST have exactly one element: a base64 DER certificate that parses as exactly one X.509 certificate. |
+
+Other fields in each JWK set or key entry are ignored, except that per the
+SPIFFE X.509-SVID bundle specification JWK entries SHOULD NOT include a `kid`
+parameter and implementations MAY reject bundles whose keys contain `kid`. If
+any entry of a trust domain's bundle is invalid, the whole map is invalid; gRPC
+does not skip individual bad JWK entries.
 
 ### 10.2 Loading Rules
 
@@ -543,8 +557,8 @@ interoperability.
   validation) and the file-watcher provider (with a refresh interval and an
   optional SPIFFE trust bundle map file).
 - It MUST let applications set the minimum and maximum TLS version.
-- The server credentials API MUST let applications set the client
-  certificate request type.
+- The server credentials API MUST let applications configure the client
+  certificate request behavior in [Client Certificates and Mutual TLS](#5-client-certificates-and-mutual-tls).
 - It MUST let applications install a custom verifier that may finish
   asynchronously. It MUST let applications turn off hostname verification
   and, on the client, chain verification.

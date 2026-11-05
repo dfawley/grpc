@@ -5,11 +5,12 @@
 
 # 5.2.2 HTTP/2 Server Transport
 
-<!-- Sources: A9, A18, doc/keepalive.md, doc/PROTOCOL-HTTP2.md, doc/http2-interop-test-descriptions.md (informative) -->
+<!-- Sources: A8, A9, A18, doc/keepalive.md, doc/PROTOCOL-HTTP2.md, doc/http2-interop-test-descriptions.md (informative) -->
 
 This document covers server-side HTTP/2 connection behavior that is not part
 of the per-call exchange in
-[gRPC over HTTP/2](../../03-wire-protocol/01-http2.md): SETTINGS, the
+[gRPC over HTTP/2](../../03-wire-protocol/01-http2.md): connection
+establishment and SETTINGS, the
 concurrent stream limit, graceful draining, server connection management,
 keepalive, ping abuse enforcement, TCP_USER_TIMEOUT, and flow control. It
 follows the structure of the [Server Transport Model](01-transport-model.md).
@@ -18,13 +19,25 @@ The client side is in
 
 ## 1. Overview
 
-An HTTP/2 server transport is one HTTP/2 connection accepted on a TCP or Unix
-domain socket listener and secured by the listening address's server
-credentials. Each stream the client opens is one incoming call.
+An HTTP/2 server transport is one HTTP/2 connection accepted on a TCP, Unix
+domain socket, or other stream socket (such as VSOCK) listener and secured by
+the listening address's server credentials. Each stream the client opens is one
+incoming call.
 
 ## 2. Listening and Connection Establishment
 
-### 2.1 SETTINGS
+### 2.1 Establishment
+
+- After accepting a connection, the server runs the security handshake of the
+  listening address's server credentials (if any) and exchanges the HTTP/2
+  connection preface, sending its initial `SETTINGS` frame and verifying the
+  client's connection preface and initial `SETTINGS` frame
+  ([RFC 9113 §3.4](https://www.rfc-editor.org/rfc/rfc9113#section-3.4)).
+- Servers SHOULD bound the time allowed for the security handshake and HTTP/2
+  connection preface with a configurable handshake timeout (default 120
+  seconds) and close connections that do not complete setup within that bound.
+
+### 2.2 SETTINGS
 
 Implementations follow HTTP/2 SETTINGS semantics
 ([RFC 9113 §6.5](https://www.rfc-editor.org/rfc/rfc9113#section-6.5)). In
@@ -58,12 +71,17 @@ the value to their subchannel to scale connections (see
 
 ## 5. Graceful Shutdown and Draining
 
-The server drains a connection with the two-phase GOAWAY sequence specified in
-[GOAWAY](../../03-wire-protocol/01-http2.md#92-goaway). Server shutdown uses
-graceful GOAWAY; see
-[Server Behavior: Graceful Shutdown](../01-server.md#13-graceful-shutdown).
-Server connection management also uses it
-([Connection Management](#6-connection-management)).
+- **Graceful draining.** The server drains a connection with the two-phase
+  `GOAWAY` sequence specified in
+  [GOAWAY](../../03-wire-protocol/01-http2.md#92-goaway). Server shutdown uses
+  graceful `GOAWAY` (see
+  [Server Behavior: Graceful Shutdown](../01-server.md#13-graceful-shutdown)),
+  as does server connection management
+  ([Connection Management](#6-connection-management)).
+- **Forced close.** On forced server shutdown, grace-period expiry, or a
+  connection-level error, the server closes the connection without waiting for
+  active streams and cancels any remaining calls on the connection. It MAY
+  first send a final `GOAWAY` or reset the active streams.
 
 ## 6. Connection Management
 
@@ -123,7 +141,7 @@ Server settings:
 
 | Setting | Default | Rules |
 | ------- | ------- | ----- |
-| `KEEPALIVE_TIME` | 2 hours | Same meaning as on the client. |
+| `KEEPALIVE_TIME` | 2 hours | Time with no bytes read on the connection before the server sends a keepalive PING. The client's 10-second minimum doesn't apply; any minimum the server enforces is implementation-defined. |
 | `KEEPALIVE_TIMEOUT` | 20 seconds | Same meaning as on the client. |
 
 Server keepalive works like client keepalive
@@ -132,9 +150,9 @@ except that the server sends keepalive PINGs whether or not the connection has
 outstanding RPCs. When the watchdog expires, the server closes the connection
 and cancels its calls on that connection.
 
-<!-- REVIEW(divergence) [TRANSPORT-7]: The minimum server `KEEPALIVE_TIME` differs: Java raises values below 10 seconds to 10 seconds (`NettyServerBuilder.keepAliveTime` uses `KeepAliveManager.clampKeepAliveTimeInNanos`), Go raises values below 1 second to 1 second (`server.go`, `KeepaliveMinServerPingTime`), and C++ accepts 1 ms (`chttp2_transport.cc`). "Same meaning as on the client" can be read as applying the client's 10-second floor. Spec says: server `KEEPALIVE_TIME` has the "Same meaning as on the client", whose rules include "Values below 10 seconds MUST be raised to 10 seconds". -->
-
 ### 7.2 Ping Enforcement
+
+> **Introduced by:** [gRFC A8: Client-side Keepalive](https://github.com/grpc/proposal/blob/master/A8-client-side-keepalive.md)
 
 Servers MUST protect themselves from clients that ping too often. Server
 settings:
@@ -230,4 +248,5 @@ Server API:
 - MUST provide a way to set `SETTINGS_MAX_CONCURRENT_STREAMS` and the maximum
   header list size the server accepts.
 - SHOULD provide a way to set the initial flow-control window sizes.
+- SHOULD provide a way to set the server handshake timeout.
 - MAY provide a way to set `MAX_PING_STRIKES`.

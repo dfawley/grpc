@@ -21,6 +21,11 @@ conventions:
 - `"name" value` denotes one HTTP/2 header field whose name is `name` and
   whose value is `value`. Header fields are carried in HPACK-encoded header
   blocks, so no `:` or CRLF separators appear on the wire.
+- Sequences of header fields in a block rule denote the fields that appear in
+  that block, not a mandatory wire order, except that HTTP/2 pseudo-header
+  fields always precede regular header fields (see [Header ordering](#32-header-ordering));
+  custom metadata keys can repeat or be comma-joined as specified in
+  [Duplicate keys and ordering](#44-duplicate-keys-and-ordering).
 - `{text}` is a prose description of a value.
 - `?(x)` is equivalent to `[x]`.
 - `DIGIT`, `HEXDIG`, `OCTET`, `SP`, and `VCHAR` are the ABNF core rules.
@@ -43,7 +48,7 @@ Request on the stream. The server sends the Response on the same stream.
 Request-Headers   = Call-Definition *Custom-Metadata
 Call-Definition   = Method Scheme Path [Authority] TE [Timeout] Content-Type
                     [Message-Type] [Message-Encoding] [Message-Accept-Encoding]
-                    [User-Agent]
+                    [User-Agent] [Previous-RPC-Attempts]
 
 Method            = ":method" "POST"
 Scheme            = ":scheme" ("http" / "https")
@@ -64,7 +69,9 @@ Microsecond       = %s"u"
 Nanosecond        = %s"n"
 
 Content-Type      = "content-type" "application/grpc" [("+proto" / Custom-Subtype)]
+                    *(";" Media-Param)
 Custom-Subtype    = "+" {custom content-subtype}
+Media-Param       = {HTTP media-type parameter}
 
 Content-Coding    = "identity" / "gzip" / "deflate" / "snappy" / {custom}
 Message-Encoding  = "grpc-encoding" Content-Coding
@@ -72,12 +79,13 @@ Message-Accept-Encoding = "grpc-accept-encoding" Content-Coding *("," Content-Co
 
 User-Agent        = "user-agent" {structured user-agent string}
 Message-Type      = "grpc-message-type" {type name for message schema}
+Previous-RPC-Attempts = "grpc-previous-rpc-attempts" 1*DIGIT
 
 Custom-Metadata   = Binary-Header / ASCII-Header
-Binary-Header     = Header-Name "-bin" {base64-encoded value}
-ASCII-Header      = Header-Name ASCII-Value
+Binary-Header     = Header-Name "-bin" {binary value, encoded as in §4.3}
+ASCII-Header      = Header-Name ASCII-Value                     ; Header-Name MUST NOT end in "-bin"
 Header-Name       = 1*( %x30-39 / %x61-7A / "_" / "-" / "." )   ; 0-9 a-z _ - .
-ASCII-Value       = 1*( %x20-7E )                              ; space and printable ASCII
+ASCII-Value       = *( %x20-7E )                               ; space and printable ASCII (empty allowed)
 ```
 
 `Request-Headers` are sent as one HTTP/2 field block
@@ -165,20 +173,24 @@ Deadline expiry is described in [Deadline expiry and cancellation](#84-deadline-
 
 ### 3.8 `content-type`
 
-- The client MUST send `content-type` starting with `application/grpc`.
-  Bare `application/grpc` and `application/grpc+proto` both mean Protocol
-  Buffers encoding. Other content-subtypes (`+{custom}`) name other
-  message encodings; see [Protocol Buffers Mapping](04-protobuf.md).
-- If `content-type` does not start with `application/grpc`, a gRPC server
+- The client MUST send a gRPC `content-type`: `"application/grpc"` followed
+  immediately by the end of the value, a content-subtype (`"+"` and the
+  subtype name), or HTTP media-type parameters (`";"` and parameters). Values
+  with any other character immediately after `"application/grpc"` (for
+  example, `"application/grpc-web"` or `"application/grpc-web+proto"`) are
+  not gRPC content-types. Bare `application/grpc` and `application/grpc+proto`
+  both mean Protocol Buffers encoding. Other content-subtypes (`+{custom}`)
+  name other message encodings; see [Protocol Buffers Mapping](04-protobuf.md).
+- If `content-type` is missing or is not a gRPC `content-type`, a gRPC server
   SHOULD respond with HTTP status 415 (Unsupported Media Type). Then other
   HTTP/2 clients will not mistake a gRPC error response (which uses HTTP
   status 200) for success.
-- If `content-type` starts with `application/grpc` but names a
-  content-subtype for which the server has no codec, the server MAY fail
-  the call with `UNIMPLEMENTED`, sent as a normal gRPC status (HTTP status
-  200, `grpc-status` in `Trailers-Only`). Otherwise it processes the call
-  with the method's default codec. HTTP 415 is used only for
-  content-types that do not start with `application/grpc`. See
+- If `content-type` is a gRPC `content-type` that names a content-subtype for
+  which the server has no codec, the server MAY fail the call with
+  `UNIMPLEMENTED`, sent as a normal gRPC status (HTTP status 200,
+  `grpc-status` in `Trailers-Only`). Otherwise it processes the call with the
+  method's default codec (and ignores any media-type parameters after `";"`).
+  HTTP 415 is used only when `content-type` is not a gRPC `content-type`. See
   [Core RPC Semantics](../02-rpc-semantics/README.md).
 
 ### 3.9 `grpc-encoding` and `grpc-accept-encoding`
@@ -197,8 +209,9 @@ Compression error handling:
 
 | Situation | Behavior |
 | --------- | -------- |
-| The request's `grpc-encoding` names an algorithm the server does not support. | The server MUST fail the call with `UNIMPLEMENTED`. The status message SHOULD name the unsupported algorithm and the supported ones. The response MAY include `grpc-accept-encoding` listing what the server accepts. If it does, that list MUST NOT include the unsupported algorithm. |
+| The request's `grpc-encoding` names an algorithm the server does not support. | The server MUST fail the call with `UNIMPLEMENTED`. The status message SHOULD name the unsupported algorithm and MAY list the supported ones. The response MAY include `grpc-accept-encoding` listing what the server accepts. If it does, that list MUST NOT include the unsupported algorithm. |
 | The client gets a message compressed with an algorithm it does not support. | The client MUST fail the call with `INTERNAL`. |
+| The response's `grpc-encoding` names an algorithm the client does not support. | The client MAY fail the call with `INTERNAL` as soon as it gets the headers. If it doesn't, the previous row applies when a compressed message arrives. |
 | A message fails to decompress even though its algorithm is supported. | The receiver fails the call with `INTERNAL`. |
 | The server is asked to compress a response with an algorithm that the client's most recent `grpc-accept-encoding` does not list. | The server MUST send that message uncompressed. |
 | An `UNIMPLEMENTED` status arrives for a request compressed with an algorithm in the server's `grpc-accept-encoding`. | The status MUST NOT be caused by compression. |
@@ -262,7 +275,10 @@ Its semantics, and those of the response header `grpc-retry-pushback-ms`
   `grpc-retry-pushback-ms`, and `grpc-trace-bin` (see
   [Tracing](../08-observability/05-tracing.md)).
 - Pseudo-headers, `te`, `content-type`, and `user-agent` are set by the gRPC
-  library. They are not application metadata.
+  library. They are not application metadata: applications can't set them as
+  metadata. Whether a server shows the received values to the application as
+  metadata is implementation-defined
+  ([Core RPC Semantics: Reserved Keys](../02-rpc-semantics/README.md#75-reserved-keys)).
 - A full list of metadata keys is in
   [Appendix A](../appendices/a-metadata-keys.md).
 
@@ -312,10 +328,12 @@ ending in `-bin`) is base64-encoded with the standard alphabet
 - Implementations SHOULD compute header size as defined for
   `SETTINGS_MAX_HEADER_LIST_SIZE`
   ([RFC 9113 §6.5.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.5.2)).
-  The length of a binary value is its length after base64 encoding.
+  The length of a binary value is its wire-encoded length (after base64
+  encoding, or raw length plus the leading NUL byte when
+  [True binary metadata](02-true-binary-metadata.md) is used).
 - Implementations SHOULD advertise their limit to the peer in
   `SETTINGS_MAX_HEADER_LIST_SIZE` (see
-  [HTTP/2 Client Transport: SETTINGS](../04-client-channel/08-transports/02-http2.md#22-settings) and [HTTP/2 Server Transport: SETTINGS](../05-server/02-transports/02-http2.md#21-settings)).
+  [HTTP/2 Client Transport: SETTINGS](../04-client-channel/08-transports/02-http2.md#22-settings) and [HTTP/2 Server Transport: SETTINGS](../05-server/02-transports/02-http2.md#22-settings)).
 - When the received headers exceed the limit, the receiver MUST fail the call.
   A server SHOULD respond with `RESOURCE_EXHAUSTED` in Trailers-Only, or reset
   the stream if it cannot. A client SHOULD report `RESOURCE_EXHAUSTED` to the
@@ -379,14 +397,16 @@ part of the message stream.
 Response-Headers  = HTTP-Status [Message-Encoding] [Message-Accept-Encoding]
                     Content-Type *Custom-Metadata
 Trailers-Only     = HTTP-Status Content-Type [Message-Accept-Encoding] Trailers
-Trailers          = Status [Status-Message] [Status-Details] *Custom-Metadata
+Trailers          = Status [Status-Message] [Status-Details] [Retry-Pushback]
+                    *Custom-Metadata
 
 HTTP-Status       = ":status" "200"
 Status            = "grpc-status" 1*DIGIT                 ; decimal, no leading zeros
 Status-Message    = "grpc-message" Percent-Encoded
-Status-Details    = "grpc-status-details-bin" {base64-encoded value}
+Status-Details    = "grpc-status-details-bin" {binary value, encoded as in §4.3}
+Retry-Pushback    = "grpc-retry-pushback-ms" ["-"] 1*DIGIT ; see §6.6
 
-Percent-Encoded        = 1*(Percent-Byte-Unencoded / Percent-Byte-Encoded)
+Percent-Encoded        = *(Percent-Byte-Unencoded / Percent-Byte-Encoded)
 Percent-Byte-Unencoded = %x20-24 / %x26-7E                ; space and VCHAR, except "%"
 Percent-Byte-Encoded   = "%" 2HEXDIG
 ```
@@ -551,7 +571,7 @@ RST_STREAM error codes map to gRPC status codes as follows:
 | `INTERNAL_ERROR` (0x2) | `INTERNAL` |
 | `FLOW_CONTROL_ERROR` (0x3) | `INTERNAL` |
 | `SETTINGS_TIMEOUT` (0x4) | `INTERNAL` |
-| `STREAM_CLOSED` (0x5) | No mapping, because there is no open stream to report to. Implementations SHOULD log it. |
+| `STREAM_CLOSED` (0x5) | `INTERNAL` if received on a stream that is still open locally; if there is no open stream to report to, it has no status mapping and implementations SHOULD log it. |
 | `FRAME_SIZE_ERROR` (0x6) | `INTERNAL` |
 | `REFUSED_STREAM` (0x7) | `UNAVAILABLE`. No processing happened, and the request can be retried, possibly elsewhere. Eligible for transparent retry (see [Retries and Hedging](../04-client-channel/12-retries.md)). |
 | `CANCEL` (0x8) | Sent by a client: the server treats the call as cancelled. Sent by a server: the client reports `CANCELLED`. Servers SHOULD use it only when they must cancel a call and cannot send a complete response (for example, because a message is only partly sent). |
@@ -559,6 +579,7 @@ RST_STREAM error codes map to gRPC status codes as follows:
 | `CONNECT_ERROR` (0xa) | `INTERNAL` |
 | `ENHANCE_YOUR_CALM` (0xb) | `RESOURCE_EXHAUSTED`. The runtime adds detail saying that the exhausted resource is bandwidth. |
 | `INADEQUATE_SECURITY` (0xc) | `PERMISSION_DENIED`. The runtime adds detail saying that the protocol is not secure enough for the call. |
+| `HTTP_1_1_REQUIRED` (0xd) | `INTERNAL` |
 | Any other code | `INTERNAL` |
 
 `NO_ERROR` received before the complete `Trailers` MUST NOT be mapped to
@@ -628,8 +649,9 @@ gives the reason. These strings are defined:
 Clients handle GOAWAY as described in RFC 9113 §6.8. In addition:
 
 - Streams with IDs above the last-stream-id were not processed. The client
-  MUST fail them with `UNAVAILABLE`, and they are eligible for transparent
-  retry (see [Retries and Hedging](../04-client-channel/12-retries.md)).
+  MUST fail them with `UNAVAILABLE`, whatever the GOAWAY error code, and
+  they are eligible for transparent retry (see
+  [Retries and Hedging](../04-client-channel/12-retries.md)).
 - If the connection closes while streams at or below the last-stream-id are
   still open, they fail as described in
   [Connection failure](#94-connection-failure).

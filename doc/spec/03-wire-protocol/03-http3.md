@@ -30,9 +30,12 @@ applies unchanged. In particular:
 
 - The content-type is still `application/grpc` (with or without a
   content-subtype). It does not change for HTTP/3.
-- `Response-Headers`, `Trailers`, and `Trailers-Only` are sent as HTTP/3
-  HEADERS frames. EOS is the end of the QUIC stream (the FIN bit), not an
-  END_STREAM flag.
+- `Request-Headers`, `Response-Headers`, `Trailers`, and `Trailers-Only` are
+  sent as HTTP/3 `HEADERS` frames encoded with QPACK
+  ([RFC 9204](https://www.rfc-editor.org/rfc/rfc9204)) rather than HPACK.
+  Request and response EOS are signaled by closing the corresponding direction
+  of the QUIC stream (the QUIC `STREAM` frame `FIN` bit), not an HTTP-layer
+  `END_STREAM` flag.
 - Binary metadata is base64-encoded. The HTTP/2
   [true binary metadata](02-true-binary-metadata.md) extension does not apply.
 
@@ -92,6 +95,10 @@ HTTP/2 codes that have no HTTP/3 equivalent (`FLOW_CONTROL_ERROR`,
 `STREAM_CLOSED`, `COMPRESSION_ERROR`, `INADEQUATE_SECURITY`) do not occur on
 HTTP/3. QUIC handles flow control and security itself.
 
+If a client receives `RESET_STREAM` after it has already received the complete
+`Trailers` (and QUIC `FIN`) for the stream, the call's status is the one from
+`Trailers`; the reset does not change it.
+
 ## 3. Deadline Expiry and Cancellation
 
 When a call exceeds its deadline, the stream is reset. HTTP/3 has no
@@ -104,16 +111,23 @@ When a call exceeds its deadline, the stream is reset. HTTP/3 has no
 
 - A `RESET_STREAM` can cause the peer to discard data already sent on the
   stream ([RFC 9000 §3.2](https://www.rfc-editor.org/rfc/rfc9000#section-3.2)),
-  including a complete response. Implementations SHOULD NOT reset a stream
-  after its response has been fully sent.
+  including a complete response. Implementations SHOULD NOT send `RESET_STREAM`
+  after the response `Trailers` and `FIN` have been sent.
 - When the response finishes before the request, the server stops the request
-  side with `STOP_SENDING` as described in
+  side by sending `STOP_SENDING` with `H3_NO_ERROR` (`0x0100`), as described in
   [RFC 9114 §4.1](https://www.rfc-editor.org/rfc/rfc9114#section-4.1). That
-  alone is not enough for an exceeded deadline, because both directions must
-  be aborted: if the deadline expires while the request side is still open,
-  the server SHOULD send both `STOP_SENDING` and `RESET_STREAM` with
+  alone is not enough for an exceeded deadline when no complete response has
+  been sent, because both directions must be aborted: if the deadline expires
+  before `Trailers` are sent while the request side is still open, the server
+  SHOULD send both `STOP_SENDING` and `RESET_STREAM` with
   `H3_REQUEST_CANCELLED`.
-- Client-initiated cancellation uses the same frames and code.
+- Client-initiated cancellation uses `STOP_SENDING` (if the response stream is
+  still open) and `RESET_STREAM` (if the request stream is still open) with
+  `H3_REQUEST_CANCELLED`.
+- As on HTTP/2 ([Deadline expiry and cancellation](01-http2.md#84-deadline-expiry-and-cancellation)),
+  when a client receives `H3_REQUEST_CANCELLED` on a call whose deadline has
+  already expired locally, it MUST report `DEADLINE_EXCEEDED` rather than
+  `CANCELLED`.
 
 ## 4. API Requirements
 

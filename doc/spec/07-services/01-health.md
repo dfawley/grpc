@@ -9,14 +9,15 @@
 
 The health service lets a server report whether it can handle RPCs, both
 overall and for each service. Clients use it for client-side health checking
-([Client-side health checking](../04-client-channel/10-health-checking.md)),
+([Client-Side Health Checking](../04-client-channel/10-health-checking.md)),
 and external systems such as load balancers and orchestrators use it for
 centralized health checking. Because it is an ordinary gRPC service, it shares
 the server's transport, security, quota, and access-control setup.
 
 ## 1. Service Definition
 
-The service is defined in `grpc/health/v1/health.proto`:
+The service is defined in
+[`grpc/health/v1/health.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto):
 
 ```protobuf
 syntax = "proto3";
@@ -87,6 +88,8 @@ do not implement the health service, in which case `Check` fails with
 
 ## 4. `Watch`
 
+> **Introduced by:** [gRFC A17: Client-Side Health Checking](https://github.com/grpc/proposal/blob/master/A17-client-side-health-checking.md)
+
 `Watch` is a server-streaming RPC that reports the status of one service as it
 changes:
 
@@ -113,7 +116,7 @@ How clients react to the call ending:
   exponential backoff.
 
 The client-side state machine built on `Watch` is specified in
-[Client-side health checking](../04-client-channel/10-health-checking.md).
+[Client-Side Health Checking](../04-client-channel/10-health-checking.md).
 
 ## 5. `List`
 

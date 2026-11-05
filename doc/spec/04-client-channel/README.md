@@ -7,17 +7,12 @@
 
 <!-- Sources: doc/load-balancing.md, doc/naming.md, doc/service_config.md, A31, A61 -->
 
-From the application's point of view, a gRPC client **channel** is a logical
-connection to a named service. The application identifies that service with a
-**target** URI. The channel handles name resolution, connection management,
-load balancing, per-method configuration, and retries, so the application can
-create a channel and start sending RPCs on it right away. The channel MAY hold
-zero, one, or many transport connections at any time, and the application
-MUST NOT assume any relationship between RPCs and connections.
-
 This section specifies the client channel's architecture, its public API, and
-the internal plugin APIs between the channel and its components. It applies
-to all gRPC implementations.
+the internal plugin APIs between the channel and its components: target URI
+parsing and name resolution, service configuration, per-call dispatch, load
+balancing and the standard LB policies, subchannels, client transports, HTTP
+CONNECT proxies, client-side health checking, backend metrics (ORCA), and
+retries and hedging.
 
 ## Contents
 

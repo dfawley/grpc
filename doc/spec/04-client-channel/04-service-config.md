@@ -5,7 +5,7 @@
 
 # 4.4 Service Config
 
-<!-- Sources: doc/service_config.md, grpc-proto grpc/service_config/service_config.proto, A2, A6, A17, A21, A24, A105 -->
+<!-- Sources: doc/service_config.md, A2, A6, A17, A21, A24, A54, A105 -->
 
 The **service config** lets a service owner publish settings that every client
 of the service applies automatically. Examples are the LB policy and its
@@ -16,34 +16,30 @@ service owner can change it without touching each client.
 
 ## 1. Format
 
-The schema is the `grpc.service_config.ServiceConfig` message in
-`grpc/service_config/service_config.proto`. gRPC does not consume the proto
-form. It consumes the **JSON** form, produced by the standard
-[proto3 JSON mapping](https://protobuf.dev/programming-guides/proto3/#json). So:
+gRPC consumes the service config as a **JSON** object:
 
-- Field names are converted from `snake_case` to `lowerCamelCase`, for
-  example `method_config` becomes `methodConfig`. Fields with an explicit
-  `json_name` use that name. Parsers MUST accept the `lowerCamelCase`
-  names.
-- Strings, bools, and 32-bit integers become the corresponding JSON types.
-  64-bit integers are JSON strings (for example `"251"`). Parsers MUST also
+- Field names use `lowerCamelCase` (for example `methodConfig` and
+  `maxRequestMessageBytes`).
+- `string`, `bool`, `number`, and 32-bit integer fields (`int32`, `uint32`) use
+  the corresponding JSON types. 64-bit integer fields (`int64`, `uint64`) are
+  encoded as base-10 JSON strings (for example `"251"`); parsers MUST also
   accept JSON numbers for them.
-- Repeated fields are JSON arrays. Maps are JSON objects.
-- A `google.protobuf.Duration` is a JSON string holding a decimal number of
-  seconds with an `s` suffix and at most 9 fractional digits, for example
-  `"1.5s"` or `"0.000340012s"`.
-- Wrapper types (`google.protobuf.BoolValue`, `UInt32Value`, `StringValue`,
-  and so on) are the bare JSON value. An absent wrapper field means "not
-  set".
-- Status codes (`google.rpc.Code`) are given as the integer code or as the
-  exact upper-case code name, for example `14` or `"UNAVAILABLE"`. Any other
+- Lists (`list of <type>`) are JSON arrays. Maps (`map of string → <type>`)
+  are JSON objects.
+- A `Duration` is a JSON string holding a decimal number of seconds with an
+  `s` suffix and at most 9 fractional digits, for example `"1.5s"` or
+  `"0.000340012s"`.
+- Unless a field specifies otherwise, an absent field means "not set". A field
+  whose value is JSON `null` means the same as an absent field.
+- Status codes are given as the integer code (`0`–`16`) or as the exact
+  upper-case status code name, for example `14` or `"UNAVAILABLE"` (see
+  [Status Codes](../02-rpc-semantics/README.md#101-status-codes)). Any other
   form (such as `"unavailable"`) is not a valid status code.
-
-The JSON form can also express LB policies that the proto does not define.
-In the proto, each `LoadBalancingConfig` entry is a `oneof` over the policies
-known to the proto. In JSON, each entry is an object whose single key is the
-LB policy name. That key can be any string, so third-party and custom LB
-policies can be named and configured ([`loadBalancingConfig`](#52-loadbalancingconfig)).
+- A `LoadBalancingConfig list` is a JSON array in which each element is a JSON
+  object whose single key is an LB policy name and whose value is that
+  policy's configuration object ([`loadBalancingConfig`](#52-loadbalancingconfig)).
+  Because the key can be any string, custom and third-party LB policies use the
+  same mechanism as built-in policies.
 
 A service config delivered in DNS TXT records must be ASCII (see
 [Name Resolution](03-name-resolution.md)).
@@ -81,7 +77,8 @@ A channel gets its service config from one of these sources:
 1. **The resolver.** This is the recommended way. The resolver parses the
    config with the channel's parse operation and returns the parsed config,
    an error, or nothing ([Name Resolution](03-name-resolution.md)). For
-   example, the `dns` resolver reads the config from TXT records and supports
+   example, the `dns` resolver can read the config from TXT records (a lookup
+   that is off by default unless the application turns it on) and supports
    canary rollouts with *service config choices*. That mechanism is
    specified in [Service Config in DNS](03-name-resolution.md#72-service-config-in-dns).
 2. **The default service config**, a JSON string set through the channel API.
@@ -146,7 +143,7 @@ The exact algorithm is in [Channel Handling of Resolver Results](03-name-resolut
 ## 4. Method Config Selection
 
 For each RPC, the default ConfigSelector ([Per-call Configuration and Call Flow](05-call-dispatch.md))
-looks up the `MethodConfig` for the RPC's full method name `/service/method`.
+looks up the `methodConfig` entry for the RPC's full method name `/service/method`.
 The most specific match wins:
 
 1. An entry whose `name` has both `service` and `method` equal to the RPC's
@@ -167,14 +164,30 @@ from less specific entries.
 
 ### 5.1 `ServiceConfig` (top level)
 
-| JSON field | Type | Default | Description and validation |
-| --- | --- | --- | --- |
-| `loadBalancingConfig` | array of `LoadBalancingConfig` | unset | Selects and configures the LB policy ([`loadBalancingConfig`](#52-loadbalancingconfig)). |
-| `loadBalancingPolicy` | string | unset | **Deprecated.** Names an LB policy that needs no config ([`loadBalancingPolicy` (deprecated)](#53-loadbalancingpolicy-deprecated)). Ignored if `loadBalancingConfig` is set. |
-| `methodConfig` | array of `MethodConfig` | empty | Per-method settings ([`methodConfig`](#54-methodconfig)). |
-| `retryThrottling` | `RetryThrottlingPolicy` | unset (no throttling) | Throttles retries and hedging for the channel. Fields `maxTokens` and `tokenRatio`. Validation and semantics are in [Retries and Hedging](12-retries.md). |
-| `healthCheckConfig` | `HealthCheckConfig` | unset (no health checking) | Client-side health checking ([`healthCheckConfig`](#55-healthcheckconfig)). |
-| `connectionScaling` | `ConnectionScaling` | unset | Dynamic connection scaling ([`connectionScaling`](#56-connectionscaling)). |
+```json
+{
+  "loadBalancingConfig": [ { "round_robin": {} } ],
+  "loadBalancingPolicy": "round_robin",
+  "methodConfig": [
+    {
+      "name": [ { "service": "foo.Foo", "method": "Bar" } ],
+      "timeout": "1s"
+    }
+  ],
+  "retryThrottling": { "maxTokens": 10, "tokenRatio": 0.1 },
+  "healthCheckConfig": { "serviceName": "foo" },
+  "connectionScaling": { "maxConnectionsPerSubchannel": 4 }
+}
+```
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `loadBalancingConfig` | LoadBalancingConfig list | No | — | Selects and configures the LB policy ([`loadBalancingConfig`](#52-loadbalancingconfig)). |
+| `loadBalancingPolicy` | string | No | — | **Deprecated.** Names an LB policy that needs no config ([`loadBalancingPolicy` (deprecated)](#53-loadbalancingpolicy-deprecated)). Ignored if `loadBalancingConfig` is set. |
+| `methodConfig` | list of object | No | `[]` | Per-method settings ([`methodConfig`](#54-methodconfig)). |
+| `retryThrottling` | object | No | — (no throttling) | Throttles retries and hedging for the channel (`maxTokens` and `tokenRatio`). Validation and semantics are in [Retries and Hedging](12-retries.md#4-retry-throttling). |
+| `healthCheckConfig` | object | No | — (no health checking) | Client-side health checking ([`healthCheckConfig`](#55-healthcheckconfig)). |
+| `connectionScaling` | object | No | — | Dynamic connection scaling ([`connectionScaling`](#56-connectionscaling)). |
 
 ### 5.2 `loadBalancingConfig`
 
@@ -185,10 +198,12 @@ from less specific entries.
 policy's config object:
 
 ```json
-"loadBalancingConfig": [
-  { "my_custom_policy": { "someSetting": 5 } },
-  { "round_robin": {} }
-]
+{
+  "loadBalancingConfig": [
+    { "my_custom_policy": { "someSetting": 5 } },
+    { "round_robin": {} }
+  ]
+}
 ```
 
 The client processes it as follows:
@@ -211,8 +226,8 @@ widely supported fallback after it. Clients that do not have the first policy
 fall through to the next.
 
 **Nested policies.** Many LB policies delegate to child policies. Their
-configs contain fields (usually `childPolicy`) of the same
-array-of-`LoadBalancingConfig` type, with the same semantics: the first
+configs contain `LoadBalancingConfig list` fields (usually `childPolicy`),
+with the same semantics: the first
 registered policy is selected, its config must be valid, and the list is
 invalid if no policy is registered. The parent policy's parser validates them
 recursively, so an invalid nested config makes the whole service config
@@ -230,6 +245,7 @@ config schema:
 - [outlier_detection](lb-policies/outlier_detection.md)
 - [priority](lb-policies/priority.md)
 - [weighted_target](lb-policies/weighted_target.md)
+- [rls](lb-policies/rls.md)
 - xDS LB policies: [xDS LB Policies](../09-xds/06-lb-policies.md)
 
 Some registered policies are internal. They need inputs that only another
@@ -249,17 +265,49 @@ reject configs that do not come from that component.
 
 ### 5.4 `methodConfig`
 
-`methodConfig` is a JSON array of `MethodConfig` objects:
+```json
+{
+  "methodConfig": [
+    {
+      "name": [
+        { "service": "foo.Foo", "method": "Bar" },
+        { "service": "baz.Baz" }
+      ],
+      "waitForReady": true,
+      "timeout": "1.0s",
+      "maxRequestMessageBytes": 1048576,
+      "maxResponseMessageBytes": 4194304,
+      "retryPolicy": {
+        "maxAttempts": 3,
+        "initialBackoff": "0.1s",
+        "maxBackoff": "1s",
+        "backoffMultiplier": 2,
+        "retryableStatusCodes": [ "UNAVAILABLE" ]
+      }
+    },
+    {
+      "name": [ { "service": "foo.Foo", "method": "IdempotentGet" } ],
+      "hedgingPolicy": {
+        "maxAttempts": 3,
+        "hedgingDelay": "0.5s",
+        "nonFatalStatusCodes": [ "UNAVAILABLE" ]
+      }
+    }
+  ]
+}
+```
 
-| JSON field | Type | Default | Description and validation |
-| --- | --- | --- | --- |
-| `name` | array of `Name` | empty | The methods this entry applies to. See the rules below. |
-| `waitForReady` | bool | unset | Default `wait_for_ready` for matching RPCs ([wait_for_ready](02-channel.md#8-wait_for_ready)). Used only when the application did not set `wait_for_ready` on the RPC. A value the application sets explicitly always wins. |
-| `timeout` | Duration | unset | Default timeout for matching RPCs. The RPC's deadline is the earlier of the application's deadline (if any) and the RPC's start time plus `timeout`. If neither is set, the RPC has no deadline. Must be a valid Duration and MUST NOT be negative; a negative value (including one with a zero seconds part, such as `"-0.5s"`) makes the service config invalid. |
-| `maxRequestMessageBytes` | uint32 | unset | Largest request message, in bytes, the client may send on matching RPCs. The limit applies to each message after per-message compression. The effective limit is the smaller of this value and the max send message size the application set for the channel. Either one alone applies if the other is unset; the built-in default applies only if neither is set. The service config therefore never raises a limit the application set explicitly. `0` is valid and allows only empty messages. Must be a non-negative integer that fits in 32 bits. |
-| `maxResponseMessageBytes` | uint32 | unset | Largest response message, in bytes, the client accepts on matching RPCs. Same rules as `maxRequestMessageBytes`, combined with the max receive message size the application set for the channel. |
-| `retryPolicy` | `RetryPolicy` | unset | Retry policy for matching RPCs. Validation and semantics are in [Retries and Hedging](12-retries.md). |
-| `hedgingPolicy` | `HedgingPolicy` | unset | Hedging policy for matching RPCs. Validation and semantics are in [Retries and Hedging](12-retries.md). |
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `methodConfig[].name` | list of object | No | `[]` | The methods this entry applies to. See the rules below. |
+| `methodConfig[].name[].service` | string | No | `""` | Fully qualified service name, including package (for example `"grpc.health.v1.Health"`). Empty means all services (only valid when `method` is also empty). |
+| `methodConfig[].name[].method` | string | No | `""` | Method name within `service`. Empty means all methods of `service`. |
+| `methodConfig[].waitForReady` | bool | No | — | Default `wait_for_ready` for matching RPCs ([wait_for_ready](02-channel.md#8-wait_for_ready)). Used only when the application did not set `wait_for_ready` on the RPC. A value the application sets explicitly always wins. |
+| `methodConfig[].timeout` | Duration | No | — | Default timeout for matching RPCs. The RPC's deadline is the earlier of the application's deadline (if any) and the RPC's start time plus `timeout`. If neither is set, the RPC has no deadline. MUST be a valid Duration and MUST NOT be negative; a negative value (including one with a zero seconds part, such as `"-0.5s"`) makes the service config invalid. |
+| `methodConfig[].maxRequestMessageBytes` | uint32 | No | — | Largest request message, in bytes, the client may send on matching RPCs. The limit applies to each message after per-message compression. The effective limit is the smaller of this value and the max send message size the application set (for the channel or, where supported, per call). Either one alone applies if the other is unset; the built-in default applies only if neither is set. The service config therefore never raises a limit the application set explicitly. `0` is valid and allows only empty messages. MUST be a non-negative integer that fits in 32 bits. |
+| `methodConfig[].maxResponseMessageBytes` | uint32 | No | — | Largest response message, in bytes, the client accepts on matching RPCs. Same rules as `maxRequestMessageBytes`, combined with the max receive message size the application set (for the channel or, where supported, per call). |
+| `methodConfig[].retryPolicy` | object | No | — | Retry policy for matching RPCs. Schema, validation, and semantics are in [Retries and Hedging](12-retries.md#2-retry-policy). |
+| `methodConfig[].hedgingPolicy` | object | No | — | Hedging policy for matching RPCs. Schema, validation, and semantics are in [Retries and Hedging](12-retries.md#3-hedging-policy). |
 
 If both `retryPolicy` and `hedgingPolicy` are set in the same entry, the
 service config is invalid. If neither is set, matching RPCs get no
@@ -272,22 +320,22 @@ message larger than its effective `maxResponseMessageBytes` fails. Both
 failures use status `RESOURCE_EXHAUSTED` (see
 [Core RPC Semantics](../02-rpc-semantics/README.md)).
 
-**`Name` objects** have two string fields, `service` and `method`. In JSON,
+**`name` entries** have two string fields, `service` and `method`. In JSON,
 an absent field, `null`, and `""` all mean the same thing (empty). The rules
 are:
 
-- A `MethodConfig` whose `name` list is absent or empty applies to no RPCs
-  and is skipped. Its other fields are still validated.
-- If `service` is empty, `method` MUST also be empty. Such a `Name` is the
-  default for all methods. A `Name` with an empty `service` and a non-empty
+- A `methodConfig` entry whose `name` list is absent or empty applies to no
+  RPCs and is skipped. Its other fields are still validated.
+- If `service` is empty, `method` MUST also be empty. Such an entry is the
+  default for all methods. An entry with an empty `service` and a non-empty
   `method` makes the service config invalid.
-- If `service` is set and `method` is empty, the `Name` is the default for
+- If `service` is set and `method` is empty, the entry is the default for
   all methods of that service.
-- If both are set, the `Name` matches exactly one method.
-- Each `Name` MUST be unique across the **whole** service config, within one
-  `MethodConfig` and across different ones. Two `Name` entries with the same
-  (`service`, `method`) pair, after treating absent, `null`, and `""` as
-  equal, make the service config invalid.
+- If both are set, the entry matches exactly one method.
+- Each (`service`, `method`) pair MUST be unique across the **whole** service
+  config, within one `methodConfig` entry and across different ones. Two `name`
+  entries with the same (`service`, `method`) pair, after treating absent,
+  `null`, and `""` as equal, make the service config invalid.
 
 How an RPC is matched to an entry is in [Method Config Selection](#4-method-config-selection).
 
@@ -295,9 +343,17 @@ How an RPC is matched to an entry is in [Method Config Selection](#4-method-conf
 
 > **Introduced by:** [gRFC A17: Client-Side Health Checking](https://github.com/grpc/proposal/blob/master/A17-client-side-health-checking.md)
 
-| JSON field | Type | Default | Description and validation |
-| --- | --- | --- | --- |
-| `serviceName` | string | unset | Service name sent in client-side health checking requests. If it is unset, health checking is disabled. The empty string is a valid value and asks about the server's overall health. Must be a JSON string if present. |
+```json
+{
+  "healthCheckConfig": {
+    "serviceName": "foo"
+  }
+}
+```
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `healthCheckConfig.serviceName` | string | No | — | Service name sent in client-side health checking requests. If unset, health checking is disabled. The empty string is a valid value and asks about the server's overall health. MUST be a JSON string if present. |
 
 Client-side health checking takes effect only under LB policies that use it.
 The full behavior is in [Client-Side Health Checking](10-health-checking.md).
@@ -306,9 +362,17 @@ The full behavior is in [Client-Side Health Checking](10-health-checking.md).
 
 > **Introduced by:** [gRFC A105: MAX_CONCURRENT_STREAMS Connection Scaling](https://github.com/grpc/proposal/blob/master/A105-max_concurrent_streams-connection-scaling.md)
 
-| JSON field | Type | Default | Description and validation |
-| --- | --- | --- | --- |
-| `maxConnectionsPerSubchannel` | uint32 | unset (1) | Maximum number of connections gRPC keeps per subchannel on this channel. When every existing connection of a subchannel is at its `MAX_CONCURRENT_STREAMS` limit, gRPC opens more connections, up to this limit. Values above the channel's client-side limit (10 by default, configurable through the channel API) are clamped to that limit. A value of 0 is treated as unset (1). |
+```json
+{
+  "connectionScaling": {
+    "maxConnectionsPerSubchannel": 4
+  }
+}
+```
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `connectionScaling.maxConnectionsPerSubchannel` | uint32 | No | `1` | Maximum number of connections gRPC keeps per subchannel on this channel. When every existing connection of a subchannel is at its `MAX_CONCURRENT_STREAMS` limit, gRPC opens more connections, up to this limit. Values above the channel's client-side limit (10 by default, configurable through the channel API) are clamped to that limit. A value of `0` is treated as unset (`1`). |
 
 A change to this value applies to existing subchannels. Lowering it does not
 close connections. The number of connections drops only as connections end

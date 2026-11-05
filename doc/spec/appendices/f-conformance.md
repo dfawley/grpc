@@ -18,8 +18,13 @@ A test passing does not establish conformance with this specification, and
 the suites do not cover every requirement. Where a test description and this
 specification disagree, this specification describes the intended behavior.
 
-All suites use the test service in `src/proto/grpc/testing/test.proto`, with
-messages in `messages.proto` and `empty.proto`. The main services are
+All suites use the test service in
+[`grpc/testing/test.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/testing/test.proto),
+with messages in
+[`grpc/testing/messages.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/testing/messages.proto)
+and
+[`grpc/testing/empty.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/testing/empty.proto).
+The main services are
 `grpc.testing.TestService` (`EmptyCall`, `UnaryCall`, `CacheableUnaryCall`,
 `StreamingOutputCall`, `StreamingInputCall`, `FullDuplexCall`,
 `HalfDuplexCall`, `UnimplementedCall`), `grpc.testing.UnimplementedService`,
@@ -54,10 +59,17 @@ socket address, and a `MAX_CONCURRENT_STREAMS` limit.
 | Connection scaling | `max_concurrent_streams_connection_scaling`: with `connectionScaling.maxConnectionsPerSubchannel` = 2 and a server stream limit of 2, the third concurrent stream uses a new connection | [Subchannels and Connections](../04-client-channel/07-subchannels.md) ([Subchannels and Connections: MAX_CONCURRENT_STREAMS Connection Scaling](../04-client-channel/07-subchannels.md#8-max_concurrent_streams-connection-scaling)); [Service Config](../04-client-channel/04-service-config.md) ([`connectionScaling`](../04-client-channel/04-service-config.md#56-connectionscaling)) |
 
 Test cases for Google-specific credentials (`google_default_credentials`,
-`compute_engine_channel_credentials`) are also in this document. They
-exercise features that this specification excludes. The document also lists
-experimental and to-do tests (for example `long_lived_channel`), which are
-not part of the standard interop matrix.
+`compute_engine_channel_credentials`) are also in this document. They run
+only against Google production servers and exercise vendor-specific features
+that implementations MAY provide:
+
+| Test case | What it checks | Spec sections exercised |
+| --- | --- | --- |
+| `google_default_credentials` | A unary call with `fill_username: true` succeeds using Google default credentials, and the response username is the expected default service account. | [Google Default Credentials](../10-vendor-specific/01-google-default-credentials.md) |
+| `compute_engine_channel_credentials` | The same, using compute engine channel credentials on a GCP VM. | [Google Default Credentials](../10-vendor-specific/01-google-default-credentials.md) ([Google Default Credentials: Compute Engine Channel Credentials](../10-vendor-specific/01-google-default-credentials.md#5-compute-engine-channel-credentials)) |
+
+The document also lists experimental and to-do tests (for example
+`long_lived_channel`), which are not part of the standard interop matrix.
 
 ## F.2 HTTP/2 Transport Tests
 

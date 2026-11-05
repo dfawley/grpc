@@ -5,7 +5,7 @@
 
 # 4.5 Per-call Configuration and Call Flow
 
-<!-- Sources: doc/wait-for-ready.md, doc/service_config.md, grpc-proto grpc/service_config/service_config.proto, A6, A31, A54, A81, A105 -->
+<!-- Sources: doc/wait-for-ready.md, doc/service_config.md, A6, A31, A54, A81, A105 -->
 
 This section specifies how the channel handles each RPC: from the moment the
 application starts it until the RPC is running as a stream on a transport
@@ -67,10 +67,10 @@ hedging attempts reuse that result.
 | Output | Description |
 | --- | --- |
 | **Status** | If it is not OK, the RPC fails immediately with this status, after the control plane status restriction ([Control Plane Status Restriction](#43-control-plane-status-restriction)). This is used when an RPC cannot be routed. None of the other outputs are used in that case. |
-| **Method config** | The per-RPC settings defined by `MethodConfig` ([Service Config](04-service-config.md)): timeout, `waitForReady`, message size limits, and retry or hedging policy. The ConfigSelector may build this config itself instead of taking it from the service config, for example from xDS route configuration. |
+| **Method config** | The per-RPC settings defined by a `methodConfig` entry ([Service Config](04-service-config.md)): timeout, `waitForReady`, message size limits, and retry or hedging policy. The ConfigSelector may build this config itself instead of taking it from the service config, for example from xDS route configuration. |
 | **Call attributes** | Values that the channel passes to the LB policy's picker with every pick for this RPC. For example, the xDS ConfigSelector passes the chosen cluster name ([Client Data Plane](../09-xds/05-client.md)). |
 | **Per-call interceptors** | Zero or more interceptors that the channel runs on this RPC after applying the method config and before the retry layer. For example, the xDS ConfigSelector uses them to apply the behavior of the chosen route's xDS HTTP filters ([xDS HTTP Filters](../09-xds/07-http-filters.md)). |
-| **On-commit callback** | Optional. The channel invokes it exactly once, when the RPC is **committed**: the channel knows the RPC will make no more LB picks. That happens when the retry layer commits to one attempt (see [Retries and Hedging](12-retries.md)), or when the RPC ends without being committed. The xDS ConfigSelector uses it to release its reference to the chosen cluster. |
+| **On-commit callback** | If present, the channel invokes it exactly once, when the RPC is **committed**: the channel knows the RPC will make no more LB picks. That happens when the retry layer commits to one attempt (see [Retries and Hedging](12-retries.md)), or when the RPC ends without being committed. The xDS ConfigSelector uses it to release its reference to the chosen cluster. |
 
 ### 2.2 Lifecycle and Ordering
 
@@ -96,7 +96,7 @@ hedging attempts reuse that result.
 The default ConfigSelector:
 
 - Returns status OK.
-- Returns the `MethodConfig` of the current service config that matches the
+- Returns the `methodConfig` entry of the current service config that matches the
   RPC's full method name ([Method Config Selection](04-service-config.md#4-method-config-selection)),
   or no method config if nothing matches. It ignores metadata.
 - Returns no call attributes, no per-call interceptors, and no on-commit
@@ -109,8 +109,8 @@ The default ConfigSelector:
 ```
 StartRpc(rpc):
   if (channel.state == SHUTDOWN):
-    return rpc.Fail(UNAVAILABLE("channel shutdown"))  // code is language-specific (01-channel.md)
-  channel.active_rpcs++          // cancels the idle timer (01-channel.md)
+    return rpc.Fail(UNAVAILABLE("channel shutdown"))  // code is language-specific (02-channel.md)
+  channel.active_rpcs++          // cancels the idle timer (02-channel.md)
   if (channel.IsChannelLevelIdle()):
     channel.ExitIdle()           // creates and starts the resolver; CONNECTING
   rpc.start_time = Now()
@@ -153,17 +153,18 @@ ApplyConfig(rpc):
     rpc.wait_for_ready = mc.wait_for_ready ?? false
   else:
     rpc.wait_for_ready = rpc.app_wait_for_ready
-  rpc.max_send_bytes = Min(channel.max_send_bytes, mc.max_request_message_bytes)
-  rpc.max_recv_bytes = Min(channel.max_recv_bytes, mc.max_response_message_bytes)
+  rpc.max_send_bytes = Min(rpc.app_max_send_bytes, mc.max_request_message_bytes)
+  rpc.max_recv_bytes = Min(rpc.app_max_recv_bytes, mc.max_response_message_bytes)
   rpc.retry_or_hedging_policy = mc.retry_policy or mc.hedging_policy (or none)
   rpc.call_attributes = sel.call_attributes
   rpc.on_commit = sel.on_commit
   RunInterceptors(sel.interceptors, rpc, next = RetryLayer)
 ```
 
-- `channel.max_send_bytes` and `channel.max_recv_bytes` are the limits the
-  application set for the channel; they are unset if it set none. `Min`
-  ignores unset values. If both are unset, the built-in default applies
+- `rpc.app_max_send_bytes` and `rpc.app_max_recv_bytes` are the limits the
+  application set through the API (for the channel or, where supported, per
+  call); they are unset if it set none. `Min` ignores unset values. If both
+  are unset, the built-in default applies
   ([API Requirements](02-channel.md#10-api-requirements)). The method config
   therefore never raises a limit the application set explicitly.
 - The timeout counts from the time the application started the RPC, not
@@ -216,7 +217,7 @@ PickLoop(attempt):
         status = RestrictControlPlaneStatus(result.status)
         if (attempt.rpc.wait_for_ready):
           break                        // wait for next picker
-        return attempt.Fail(status)    // retry layer may retry (10-retries.md)
+        return attempt.Fail(status)    // retry layer may retry (12-retries.md)
       case DROP:
         status = RestrictControlPlaneStatus(result.status)
         return attempt.rpc.FailWithoutRetry(status)
@@ -288,6 +289,8 @@ why the pick failed, and MUST include the resolution note from the most
 recent resolver result (see [Load Balancing](06-load-balancing.md)).
 
 ### 4.3 Control Plane Status Restriction
+
+> **Introduced by:** [gRFC A54: Restrict Control-Plane Status Codes](https://github.com/grpc/proposal/blob/master/A54-restrict-control-plane-status-codes.md)
 
 Control plane components (resolvers, LB policies, ConfigSelectors, and call
 credentials) MUST NOT be able to fail RPCs with status codes that are

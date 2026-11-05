@@ -5,7 +5,7 @@
 
 # `xds_wrr_locality` LB Policy
 
-<!-- Sources: A52, grpc-proto grpc/service_config/service_config.proto -->
+<!-- Sources: A52 -->
 
 > **Experimental:** This policy is registered as `xds_wrr_locality_experimental`.
 
@@ -55,9 +55,6 @@ and its child is a `weighted_target` policy with one child per locality.
 
 ## 2. Configuration
 
-Proto: `XdsWrrLocalityLoadBalancingPolicyConfig` in
-`grpc/service_config/service_config.proto`.
-
 ```json
 {
   "xds_wrr_locality_experimental": {
@@ -74,9 +71,9 @@ Proto: `XdsWrrLocalityLoadBalancingPolicyConfig` in
 
 | Input | Location | Default | Used for |
 | --- | --- | --- | --- |
-| Locality | Endpoint attribute locality, set by `cds` (see [Endpoint List and Attributes](cds.md#endpoint-list-and-attributes)) | — | Endpoints without a locality are left out of the generated targets ([Child Config Generation](#child-config-generation)). |
+| Locality | Endpoint attribute locality, set by `cds` (see [Endpoint List and Attributes](cds.md#endpoint-list-and-attributes)) | — | Grouping endpoints by locality when building the `weighted_target` config ([Child Config Generation](#child-config-generation)). |
 | Locality name string | Endpoint attribute locality name string, set by `cds` (see [Endpoint List and Attributes](cds.md#endpoint-list-and-attributes)) | — | The `weighted_target` target name ([Child Config Generation](#child-config-generation)). |
-| Locality weight | Endpoint attribute locality weight, set by `cds` (see [Endpoint List and Attributes](cds.md#endpoint-list-and-attributes)) | — | The `weighted_target` target weight; endpoints whose locality weight is 0 are left out ([Child Config Generation](#child-config-generation)). |
+| Locality weight | Endpoint attribute locality weight, set by `cds` on every endpoint of the locality (see [Endpoint List and Attributes](cds.md#endpoint-list-and-attributes)) | — | The `weighted_target` target weight for the endpoint's locality ([Child Config Generation](#child-config-generation)). |
 
 ### 2.2 Validation
 
@@ -87,12 +84,9 @@ if:
 - `childPolicy` is missing, or is an invalid `LoadBalancingConfig` list (it
   has no supported entry, or its chosen entry is invalid).
 
-Other inputs ([Other Inputs](#21-other-inputs)) are validated as follows:
-
-- **Locality:** endpoints without a locality are left out of the generated
-  targets ([Child Config Generation](#child-config-generation)).
-- **Locality weight:** endpoints whose locality weight is 0 are left out of
-  the generated targets ([Child Config Generation](#child-config-generation)).
+Other inputs ([Other Inputs](#21-other-inputs)) are always set by `cds`.
+Handling of an endpoint with no locality or with a missing or 0 locality
+weight is implementation-defined ([Child Config Generation](#child-config-generation)).
 
 ## 3. LB Policy Implementation
 
@@ -104,15 +98,25 @@ The policy keeps its `weighted_target` child policy.
 
 #### Child Config Generation
 
+The locality weight is a property of a locality, not of an endpoint. The LB
+policy API has no way to pass per-locality data to a policy, so `cds` copies
+the locality's weight (the `load_balancing_weight` of its
+`LocalityLbEndpoints` entry) onto every endpoint of that locality, together
+with the locality and locality name string. Each `xds_wrr_locality` instance
+handles one priority, and a locality appears at most once per priority (see
+[ClusterLoadAssignment and LbEndpointCollection: LocalityLbEndpoints](../04-resources/05-endpoint.md#2-localitylbendpoints)), so every endpoint of
+a locality carries the same weight. `cds` always sets a locality and a
+weight of at least 1 on every endpoint. How the policy handles an endpoint
+with no locality, no weight, or a weight of 0, and endpoints of one locality
+with different weights, is implementation-defined. A locality with no
+endpoints does not appear in the endpoint list, so it gets no target.
+
 The policy builds the `weighted_target` config from the endpoint list:
 
 ```
 targets = {}
 for endpoint in update.endpoints:
-  name = endpoint.locality_name_string; w = endpoint.locality_weight
-  if endpoint has a locality and w > 0:
-    if name not in targets: targets[name] = w
-    elif targets[name] != w: log an error; keep the first weight
+  targets[endpoint.locality_name_string] = endpoint.locality_weight
 child_config = [ { "weighted_target_experimental": { "targets": {
     name: { "weight": w, "childPolicy": config.childPolicy } for name, w in targets
 } } } ]
@@ -123,16 +127,16 @@ hierarchical path (see
 [Endpoint List and Attributes](cds.md#endpoint-list-and-attributes)). See
 [weighted_target](../../04-client-channel/lb-policies/weighted_target.md).
 
-<!-- REVIEW(divergence) [XDS_LB-11]: only C++ matches (xds_wrr_locality.cc UpdateLocked). Java fails the whole update with UNAVAILABLE and reports TRANSIENT_FAILURE if any endpoint has no locality or no locality weight, and it does not skip weight 0 (WrrLocalityLoadBalancer.java). Go uses the empty locality name for an endpoint with no locality, returns an error without reporting a state for a missing weight or an unparseable generated config, does not skip weight 0, and keeps the last weight seen for a locality, not the first (wrrlocality/balancer.go). These inputs come from cds, so this matters only in edge cases. Spec says: skip endpoints with no locality or weight 0, keep the first weight, and report TRANSIENT_FAILURE with INTERNAL if the generated config fails to parse. -->
-
 ### 3.3 Updates from the Parent
 
 On each update, the policy builds a `weighted_target` config from the endpoint
 list ([Child Config Generation](#child-config-generation)) and passes the
 update (endpoints, resolution note, attributes) to a single `weighted_target`
-child with that config, creating the child on the first update. If the
-generated config fails to parse, the policy reports TRANSIENT_FAILURE with an
-INTERNAL status. When it updates its child, it returns the child's status.
+child with that config, creating the child on the first update. Because
+`childPolicy` is validated with the config ([Validation](#22-validation)),
+the generated config always parses; what the policy does if it does not is
+implementation-defined. When it updates its
+child, it returns the child's status.
 
 ### 3.4 ExitIdle
 

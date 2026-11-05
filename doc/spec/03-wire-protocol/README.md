@@ -5,27 +5,12 @@
 
 # 3. Wire Protocol
 
-<!-- Sources: doc/PROTOCOL-HTTP2.md, G1, G2, doc/keepalive.md, A8, A9, A18, A105 -->
+<!-- Sources: doc/PROTOCOL-HTTP2.md, doc/http-grpc-status-mapping.md, doc/compression.md, doc/statuscodes.md, A6, A8, A9, A41, G1, G2, L44 -->
 
 This section specifies how the abstract RPC model of
-[Core RPC Semantics](../02-rpc-semantics/README.md) is carried over the network.
-
-gRPC is defined on top of HTTP semantics. A Call maps onto one HTTP request
-and its response, carried on a single HTTP stream:
-
-| Abstract concept ([Core RPC Semantics](../02-rpc-semantics/README.md)) | HTTP mapping |
-| ---------------------------- | ------------ |
-| Request Headers (full method name, metadata, deadline) | Request header block (`:path`, custom headers, `grpc-timeout`) |
-| Request message | Length-prefixed message in the request body |
-| Half Close | End of the request body (END_STREAM) |
-| Response Headers (metadata) | Response header block |
-| Response message | Length-prefixed message in the response body |
-| Trailers (status, metadata) | Trailer block (`grpc-status`, `grpc-message`, custom trailers), or a single Trailers-Only header block |
-| Cancellation | Abrupt stream reset (HTTP/2 `RST_STREAM`, QUIC `RESET_STREAM`) |
-
-HTTP/2 is the primary, interoperable transport. Every gRPC implementation
-SHOULD support it. HTTP/3 is also defined. Both use the same request and
-response shape, so an HTTP/3 implementation adds only the transport mapping.
+[Core RPC Semantics](../02-rpc-semantics/README.md) is carried over HTTP/2 and
+HTTP/3, together with the true-binary-metadata extension and the Protocol
+Buffers wire mapping.
 
 ## Contents
 
@@ -34,7 +19,7 @@ response shape, so an HTTP/3 implementation adds only the transport mapping.
 - [3.3 gRPC over HTTP/3](03-http3.md): HTTP/3 mapping: stream identification, error codes, stream reset, deadlines and cancellation
 - [3.4 Protocol Buffers Mapping](04-protobuf.md): services, methods, and messages on the wire; content-subtypes; rich status details
 
-## Related sections
+## Related Sections
 
 - Deadline, cancellation, metadata, and status semantics:
   [Core RPC Semantics](../02-rpc-semantics/README.md).

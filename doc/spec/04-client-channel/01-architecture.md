@@ -14,10 +14,10 @@ The client channel has these main components:
 | Component | Responsibility | Specified in |
 | --- | --- | --- |
 | **Channel** | The application-facing object. It parses the target, owns the other components, reports connectivity state, manages idleness, and dispatches RPCs. | [Channel](02-channel.md) |
-| **Name resolver** | Selected by the target URI scheme. It resolves the target into a list of endpoints (each with one or more addresses), an optional service config, attributes, and optionally a ConfigSelector. | [Name Resolution](03-name-resolution.md) |
+| **Name resolver** | Selected by the target URI scheme. It resolves the target into a list of endpoints (each with one or more addresses), a service config (if any), attributes, and a ConfigSelector (if any). | [Name Resolution](03-name-resolution.md) |
 | **Service config** | Configuration published by the service owner, usually delivered by the resolver. It selects and configures the LB policy and supplies per-method settings such as timeouts and retry policies. | [Service Config](04-service-config.md) |
 | **ConfigSelector** | An internal per-RPC hook, supplied with each resolver result. It chooses the per-method configuration and per-call attributes for each RPC. | [Per-call Configuration and Call Flow](05-call-dispatch.md) |
-| **Load balancing (LB) policy** | Creates and manages subchannels, sets the channel's connectivity state, and supplies a **picker** that chooses a subchannel for each RPC attempt. LB policies can form a tree. | [Load Balancing](06-load-balancing.md), [lb-policies/](lb-policies) |
+| **Load balancing (LB) policy** | Creates and manages subchannels, sets the channel's connectivity state, and supplies a **picker** that chooses a subchannel for each RPC attempt. LB policies can form a tree. | [Load Balancing](06-load-balancing.md), [Provided LB Policies](06-load-balancing.md#15-provided-lb-policies) |
 | **Subchannel** | A potential or established connection (or a small set of connections) to one address. The channel implements it; the LB policy manages it. | [Subchannels and Connections](07-subchannels.md) |
 | **Retry layer** | Sits between the channel's per-call configuration and the LB pick. It runs transparent retries, configurable retries, and hedging. Every attempt is load-balanced independently. | [Retries and Hedging](12-retries.md) |
 

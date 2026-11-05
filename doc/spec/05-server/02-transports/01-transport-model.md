@@ -5,13 +5,14 @@
 
 # 5.2.1 Server Transport Model
 
-<!-- Sources: A9, doc/keepalive.md, doc/PROTOCOL-HTTP2.md -->
+<!-- Sources: A8, A9, doc/keepalive.md, doc/PROTOCOL-HTTP2.md -->
 
 This document specifies the abstract server transport: what the server
 expects of the connections it accepts, independent of the wire protocol. The
 concrete transports are specified in
-[HTTP/2 Server Transport](02-http2.md) and
-[HTTP/3 Server Transport](03-http3.md). How each call is encoded on the wire
+[HTTP/2 Server Transport](02-http2.md),
+[HTTP/3 Server Transport](03-http3.md), and
+[In-Process Server Transport](04-in-process.md). How each call is encoded on the wire
 is specified in [Wire Protocol](../../03-wire-protocol/README.md). How the
 server dispatches and runs calls is specified in
 [Server Behavior](../01-server.md).
@@ -115,7 +116,8 @@ server shutdown
 a draining connection's grace period expires, when a liveness check fails,
 and when the client violates the server's ping policy
 ([Liveness and Enforcement](#7-liveness-and-enforcement)). Clients see calls
-that fail this way as `UNAVAILABLE`.
+that fail because the connection closed as `UNAVAILABLE` (or `CANCELLED` / a
+protocol-mapped status if the server reset the stream before closing).
 
 ## 6. Connection Management
 
@@ -138,7 +140,7 @@ Their defaults, rules, and procedure are in
 
 ## 7. Liveness and Enforcement
 
-> **Introduced by:** [gRFC A9: Server-side Connection Management](https://github.com/grpc/proposal/blob/master/A9-server-side-conn-mgt.md)
+> **Introduced by:** [gRFC A8: Client-side Keepalive](https://github.com/grpc/proposal/blob/master/A8-client-side-keepalive.md), [gRFC A9: Server-side Connection Management](https://github.com/grpc/proposal/blob/master/A9-server-side-conn-mgt.md)
 
 - **Server keepalive.** The transport probes the connection to detect dead
   clients, whether or not the connection has outstanding calls. If a probe is

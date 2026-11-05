@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Insert the canonical xDS LB policy tree into each xDS LB policy document and
-into 09-xds/05-lb-policies.md.
+into 09-xds/06-lb-policies.md.
 
 The tree is a box-drawing tree inside an HTML <pre> block, with each policy an
 <a href> link (GitHub keeps <a> and <b> inside <pre>). The current policy is

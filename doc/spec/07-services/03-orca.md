@@ -41,11 +41,11 @@ A load report is an `xds.data.orca.v3.OrcaLoadReport` message, defined in
 | `cpu_utilization` | 1 | `double` | CPU utilization as a fraction of the available CPU. Can be above 1.0 when usage exceeds the reporter's soft limit. | [0, ∞) |
 | `mem_utilization` | 2 | `double` | Memory utilization as a fraction of the available memory. | [0, 1] |
 | `rps` | 3 | `uint64` | Deprecated. gRPC MUST NOT set it. Use `rps_fractional`. | — |
-| `request_cost` | 4 | `map<string, double>` | Application-defined request costs. Each value is an absolute cost for this request (for example, bytes of storage). | any |
+| `request_cost` | 4 | `map<string, double>` | Application-defined request costs. Each value is an absolute cost for this request (for example, bytes of storage). | any finite value |
 | `utilization` | 5 | `map<string, double>` | Named resource utilizations, each as a fraction of the total available. | each value in [0, 1] |
 | `rps_fractional` | 6 | `double` | Total requests per second (queries per second, "QPS") served by the endpoint, across all its services. | [0, ∞) |
 | `eps` | 7 | `double` | Total errors per second served by the endpoint, across all its services. | [0, ∞) |
-| `named_metrics` | 8 | `map<string, double>` | Opaque application-defined metrics. The application decides whether each one is per-request or per-server. | any |
+| `named_metrics` | 8 | `map<string, double>` | Opaque application-defined metrics. The application decides whether each one is per-request or per-server. | any finite value |
 | `application_utilization` | 9 | `double` | Application-defined utilization as a fraction of available resources (for example, the larger of CPU and memory utilization). Can be above 1.0. | [0, ∞) |
 
 
@@ -53,6 +53,9 @@ A field that is unset (zero for scalars, missing for map keys) means "not
 reported". Utilization values should come from the latest sample or
 measurement.
 
+Every valid range contains only finite numbers: `[0, ∞)` means finite
+non-negative values, and `NaN`, `+Infinity`, and `-Infinity` are outside the
+valid range of every field, including `request_cost` and `named_metrics`.
 Recorders MUST ignore values outside the valid range. Recording such a value
 leaves any previously recorded value for that metric unchanged. This applies
 to every operation that records a single value; the bulk `setAllUtilization`
@@ -170,6 +173,8 @@ The full method name is `/xds.service.orca.v3.OpenRcaService/StreamCoreMetrics`.
 gRPC provides an implementation of `OpenRcaService` that reads from a
 per-server recorder ([Per-Server Recorder](#3-per-server-recorder)). It has one setting,
 the **minimum reporting interval**, which defaults to **30 seconds**.
+
+<!-- REVIEW(divergence) [ORCA_SVC-21]: Handling of the configured minimum reporting interval differs. C++ (`OrcaService::Options::min_report_duration`) honors any positive value below 30s and uses zero or negative values as given, so `max(report_interval, min)` is 0 when the client's `report_interval` is unset. Java (`OrcaServiceImpl.createService`) honors any positive value below 30s and replaces non-positive values with the 30s default. Go (`orca.ServiceOptions.MinReportingInterval`) raises any value below 30s (including zero, negative, or `5s`) to 30s, except through a test-only override. Spec says: one setting, default 30 seconds; no floor and no rule for non-positive values. -->
 
 For each `StreamCoreMetrics` call:
 

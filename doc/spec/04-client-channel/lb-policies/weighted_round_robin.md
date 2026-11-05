@@ -5,7 +5,7 @@
 
 # `weighted_round_robin` LB Policy
 
-<!-- Sources: A58, A61, A51 (client side), A78 (WRR metrics), A89, A114, grpc/service_config/service_config.proto (WeightedRoundRobinLbConfig) -->
+<!-- Sources: A58, A61, A51 (client side), A78 (WRR metrics), A89, A114 -->
 
 > **Introduced by:** [gRFC A58: `weighted_round_robin` LB policy](https://github.com/grpc/proposal/blob/master/A58-client-side-weighted-round-robin-lb-policy.md)
 
@@ -21,8 +21,6 @@ weights, it behaves like [`round_robin`](round_robin.md).
 Registered name: `weighted_round_robin`.
 
 ## 2. Configuration
-
-Proto: `WeightedRoundRobinLbConfig` in `grpc/service_config/service_config.proto`.
 
 ```json
 {
@@ -63,8 +61,9 @@ The config is invalid, and is rejected as described in
 if:
 
 - `oobReportingPeriod`, `blackoutPeriod`, `weightExpirationPeriod`, or
-  `weightUpdatePeriod` is not a valid duration in the protobuf JSON
-  duration format (for example, `"10s"`).
+  `weightUpdatePeriod` is not a valid Duration string (for example,
+  `"10s"`), or is negative (including a value with a zero seconds part, such
+  as `"-0.5s"`).
 - `errorUtilizationPenalty` is negative.
 
 Whether an entry of `metricNamesForComputingUtilization` that is not one
@@ -160,36 +159,41 @@ responsible for reporting them on comparable scales.
 
 ##### Blackout and Expiration
 
-Each endpoint tracks `weight`, `last_updated`, and `non_empty_since`
-(initially infinite). The endpoint MUST be updated and read under
-synchronization, because reports arrive from the data plane or OOB
-streams while the scheduler timer reads weights.
+Each endpoint tracks `weight`, `last_updated` (initially unset), and
+`non_empty_since` (initially infinite). The endpoint MUST be updated and
+read under synchronization, because reports arrive from the data plane or
+OOB streams while the scheduler timer reads weights.
 
 ```
 OnReport(qps, eps, utilization):
-  if utilization > 0 and qps > 0:
+  if not (qps > 0 and utilization > 0): return   # also ignores NaN
+  if eps > 0:
     utilization += eps / qps * config.error_utilization_penalty
-  new_weight = (utilization == 0) ? 0 : qps / utilization
-  if new_weight == 0: return
+  new_weight = qps / utilization
+  if not (new_weight > 0): return
   if non_empty_since == infinity: non_empty_since = now()
   last_updated = now()
   weight = new_weight
 
-OnEndpointBecomesReady():        # child reports READY
+OnEndpointBecomesReady():        # child transitions from non-READY to READY
   non_empty_since = infinity
 
 GetWeight():
+  if last_updated is unset:
+    return 0                     # counted as endpoint_weight_not_yet_usable
   if now() - last_updated >= config.weight_expiration_period:
     non_empty_since = infinity
-    return 0
+    return 0                     # counted as endpoint_weight_stale
   if config.blackout_period > 0 and
      now() - non_empty_since < config.blackout_period:
-    return 0
+    return 0                     # counted as endpoint_weight_not_yet_usable
   return weight
 ```
 
-Blackout applies both after an endpoint (re)connects and after its
-weight expires.
+Reports whose `qps` or `utilization` is not greater than 0 (including NaN)
+are ignored; an `eps` that is not greater than 0 contributes no error
+penalty. Blackout applies both after an endpoint (re)connects and after
+its weight expires.
 
 #### Load Report Sources
 
@@ -234,8 +238,20 @@ BuildScheduler(ready_children):
   else:
     mean = sum(nonzero) / len(nonzero)
     weights = [w if w > 0 else mean for w in weights]
+    # Clamp to bound the cost of a pick (see below).
+    weights = [min(max(w, MIN_RATIO * mean), MAX_RATIO * mean) for w in weights]
   return EDFScheduler(weights)
 ```
+
+Before building the scheduler, each weight MUST be clamped to
+`[MIN_RATIO × mean, MAX_RATIO × mean]`, where `mean` is the mean of the
+non-zero weights, `MAX_RATIO` is 10, and `MIN_RATIO` is a fixed value in
+`[0.01, 0.1]` (0.1 is RECOMMENDED). Clamping bounds how many entries a pick
+may have to skip when weights are very uneven, for example when high-weight
+endpoints are not accepting picks and the remaining endpoints have near-zero
+weights. As a consequence, an endpoint never gets more than about `MAX_RATIO`
+times, or less than `MIN_RATIO` times, the average share of picks, even if its
+reported weight is further from the mean.
 
 The scheduler is rebuilt:
 
@@ -270,8 +286,9 @@ Pick():                                     # concurrent-safe
 ```
 
 Any implementation that gives the same long-run selection proportions
-(each READY endpoint chosen in proportion to its weight), with
-comparable smoothness, is conformant.
+(each READY endpoint chosen in proportion to its clamped weight), with
+comparable smoothness, is conformant. In particular, a scheduler that quantizes
+weights (for example, to 16 bits) MUST NOT turn a positive weight into zero.
 
 ### 3.3 Updates from the Parent
 
@@ -293,9 +310,10 @@ is keyed by endpoint identity, so it is retained across updates for
 endpoints that remain present.
 
 A change to `enableOobLoadReport` or `oobReportingPeriod` is applied
-without recreating subchannels ([OOB Reports](#oob-reports)); the other
-config fields take effect when the next picker is built
-([Building the Scheduler](#building-the-scheduler)).
+without recreating subchannels ([OOB Reports](#oob-reports)), and
+reporting a new picker at the end of the update switches per-call report
+tracking on or off immediately; the other config fields also take effect
+when that picker is built ([Building the Scheduler](#building-the-scheduler)).
 
 An empty endpoint list, or an endpoint error with no previous list, shuts
 down all children, reports TRANSIENT_FAILURE, and returns `UNAVAILABLE`.
@@ -327,13 +345,18 @@ and delegates to that child's picker. When `enableOobLoadReport` is false,
 the picker attaches a call tracker to each Complete result
 ([Per-Call Reports (Default)](#per-call-reports-default)).
 
+In CONNECTING (including when any child is IDLE), the picker queues all
+picks. In TRANSIENT_FAILURE, it fails picks with an error that includes a
+child's connection failure and the resolution note, as for
+[`round_robin`](round_robin.md).
+
 ## 5. Children and Subchannels
 
 ### 5.1 Child Policies
 
 WRR creates one `pick_first` child per endpoint, with the child's
 internal health-reporting option enabled, as [`round_robin`](round_robin.md)
-does ([Update](#33-updates-from-the-parent)). Each child receives its endpoint with that
+does ([Updates from the Parent](#33-updates-from-the-parent)). Each child receives its endpoint with that
 endpoint's attributes, plus the resolution note and the top-level
 attributes.
 
@@ -350,7 +373,8 @@ children as follows:
 
 - `UpdateState(state, status, picker)`: Records the child's state and
   picker. If the state is IDLE, calls the child's `ExitIdle()`. If the
-  state is READY, calls `OnEndpointBecomesReady()` for the endpoint
+  child transitions from a non-READY state to READY, calls
+  `OnEndpointBecomesReady()` for the endpoint
   ([Blackout and Expiration](#blackout-and-expiration)). Recomputes the
   aggregate state as for `round_robin` and reports a new picker with a
   newly built scheduler ([Picker Implementation](#4-picker-implementation)).

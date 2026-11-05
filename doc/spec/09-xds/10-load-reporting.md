@@ -88,7 +88,12 @@ report. They are then discarded.
 - The LRS client keeps at most one LRS stream per LRS server. The stream uses
   the method
   `/envoy.service.load_stats.v3.LoadReportingService/StreamLoadStats` on the
-  XdsClient's channel to that server. It is created with wait_for_ready set.
+  XdsClient's channel to that server. The LRS client MAY create it with
+  wait_for_ready set, so that it waits while the channel is not connected.
+  If it does not, the stream fails right away while the channel is in
+  TRANSIENT_FAILURE and is restarted after the backoff delay described
+  below. (Compare the ADS stream rule in
+  [XdsClient: Stream lifecycle](03-xds-client.md#41-stream-lifecycle).)
 - The stream is started when the first stats object for that server is
   created. It is stopped when the server has no stats objects left and all
   final counts have been reported.
@@ -97,8 +102,6 @@ report. They are then discarded.
   in [Subchannels](../04-client-channel/07-subchannels.md) (initial delay
   1 second, multiplier 1.6, jitter 0.2, maximum delay 120 seconds). The
   backoff is reset if the failed stream had received at least one response.
-
-<!-- REVIEW(divergence) [XDS_LRS-4]: Only C++ starts the LRS stream with wait_for_ready (lrs_client.cc CallOptions().set_wait_for_ready(true)). Java (GrpcXdsTransportFactory XdsStreamingCall uses CallOptions.DEFAULT, "TODO(zivy): support waitForReady") and Go (grpctransport NewStream, no call options) do not, so their LRS streams fail fast and back off while the xDS channel is in TRANSIENT_FAILURE. No gRFC covers this. Compare the ADS rule (XDS_CLIENT-2): wait_for_ready only if the client monitors channel connectivity. Spec says: "It is created with wait_for_ready set." -->
 
 ### 3.2 Initial request
 
@@ -162,11 +165,11 @@ Each `UpstreamLocalityStats` entry contains:
   [Stats Model](#2-stats-model).
 - `cpu_utilization`, `mem_utilization`, `application_utilization`
   (`UnnamedEndpointLoadMetricStats`): set only if the propagation config
-  includes the field and the aggregate is not zero. Each has
+  includes the field and `num_requests_finished_with_metric > 0`. Each has
   `num_requests_finished_with_metric` and `total_metric_value`.
 - `load_metric_stats`: one `EndpointLoadMetricStats` per propagated named
-  metric, with `metric_name`, `num_requests_finished_with_metric`, and
-  `total_metric_value`.
+  metric with `num_requests_finished_with_metric > 0`, carrying `metric_name`,
+  `num_requests_finished_with_metric`, and `total_metric_value`.
 
 gRPC reports per-locality stats only. It does not report per-endpoint stats
 (`upstream_endpoint_stats`).
@@ -192,7 +195,7 @@ values:
 | `mem_utilization` | Propagate ORCA `mem_utilization` to `UpstreamLocalityStats.mem_utilization`. |
 | `application_utilization` | Propagate ORCA `application_utilization` to `UpstreamLocalityStats.application_utilization`. |
 | `named_metrics.*` | Propagate every entry of the ORCA `named_metrics` map. |
-| `named_metrics.<key>` | Propagate the ORCA `named_metrics` entry with key `<key>`. |
+| `named_metrics.<key>` | Propagate the ORCA `named_metrics` entry with key `<key>`, where `<key>` MUST be non-empty and not `*` (`"named_metrics."` with an empty `<key>` is ignored). |
 
 - Other strings MUST be ignored, for forward compatibility.
 - If the field is unset or empty, **nothing** is propagated from ORCA to LRS.
@@ -204,10 +207,17 @@ values:
 - Only **per-request** ORCA reports (received in a call's trailing metadata)
   are used. Out-of-band ORCA reports MUST NOT be propagated to LRS.
 - Each per-request report counts as one request. When a call finishes with a
-  report, then for each propagated field present in it:
-  `num_requests_finished_with_metric += 1` and
-  `total_metric_value += value`, tracked separately for each field and each
-  named metric key, per locality.
+  per-request `OrcaLoadReport`:
+  - For each propagated top-level utilization field (`cpu_utilization`,
+    `mem_utilization`, `application_utilization`), because `OrcaLoadReport`
+    encodes these as proto3 scalar doubles without field presence, every report
+    increments `num_requests_finished_with_metric` by 1 and adds the field's
+    value (including `0`) to `total_metric_value`.
+  - For each propagated `named_metrics` entry whose key is present in the
+    report's `named_metrics` map, `num_requests_finished_with_metric` is
+    incremented by 1 and the entry's value is added to `total_metric_value`.
+  Aggregates are tracked separately for each field and each named metric key,
+  per locality.
 - Values are opaque to gRPC. They are not validated, and they are always
   summed.
 - Aggregates are reset after each report.

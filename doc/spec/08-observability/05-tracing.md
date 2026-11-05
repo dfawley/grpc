@@ -40,10 +40,15 @@ flowchart TD
 
 `<service>` is the fully-qualified service name, and `<method>` is the method
 name. For the method `/helloworld.Greeter/SayHello`, the client call span is
-named `Sent.helloworld.Greeter.SayHello`.
+named `Sent.helloworld.Greeter.SayHello`. Span names always use the actual
+service and method names from the RPC path; unlike metric labels, generic
+(unregistered) methods are **not** replaced with `other`.
 
 An attempt span is created for every attempt, including transparent retries
 and hedged attempts.
+
+The OpenTelemetry `SpanKind` of each of the three spans is
+implementation-defined.
 
 ## 2. Client Call Span
 

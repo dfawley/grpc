@@ -202,23 +202,36 @@ parsed resource.
 
 The RLS plugin's configuration type is
 `grpc.lookup.v1.RouteLookupClusterSpecifier`
-(`grpc/lookup/v1/rls_config.proto`). The configuration MUST be the
-serialized proto; a `TypedStruct` (JSON) form is rejected.
+([`grpc/lookup/v1/rls_config.proto`](https://github.com/grpc/grpc-proto/blob/master/grpc/lookup/v1/rls_config.proto)).
+The configuration MUST be the serialized proto; a `TypedStruct` (JSON) form is
+rejected.
 
 | Field | Rule |
 | --- | --- |
 | `route_lookup_config` | MUST be present; otherwise the resource is rejected. |
 
-The plugin produces this LB policy config, where `<route_lookup_config>`
-is the proto3 JSON form of `route_lookup_config` (camelCase field names,
-fields with default values omitted, durations as strings such as `"10s"`):
+The plugin produces the following LB policy config, converting the fields of
+`route_lookup_config` to the `routeLookupConfig` JSON object specified in
+[`rls`](../../04-client-channel/lb-policies/rls.md#2-configuration) (camelCase
+field names, unset fields omitted, durations formatted as Duration strings such
+as `"10s"`, and `cache_size_bytes` formatted as an `int64`):
 
 ```json
-[ { "rls_experimental": {
-      "routeLookupConfig": <route_lookup_config>,
+[
+  {
+    "rls_experimental": {
+      "routeLookupConfig": {
+        "grpcKeybuilders": [
+          { "names": [ { "service": "example.Service" } ] }
+        ],
+        "lookupService": "dns:///lookup.example.com",
+        "cacheSizeBytes": "1048576"
+      },
       "childPolicy": [ { "cds_experimental": { "isDynamic": true } } ],
       "childPolicyConfigTargetFieldName": "cluster"
-} } ]
+    }
+  }
+]
 ```
 
 The config does not set `routeLookupChannelServiceConfig`. The RLS policy
@@ -316,6 +329,8 @@ fields are ignored, including `per_try_timeout`, `per_try_idle_timeout`,
 `host_selection_retry_max_attempts`, `retriable_status_codes`,
 `retriable_headers`, `retriable_request_headers`,
 `rate_limited_retry_back_off`, and `retry_options_predicates`.
+
+<!-- REVIEW(divergence) [XDS_ROUTING-11]: retry_on whitespace and case. C++ (xds_route_config_parser.cc) splits on "," with no trimming and matches case-sensitively, so "cancelled, unavailable" yields only cancelled. Java (XdsRouteConfigureResource.java) trims and matches case-insensitively, and also accepts underscore spellings such as deadline_exceeded. Go (unmarshal_rds.go) trims and matches case-insensitively. Envoy (retry_state_impl.cc) trims and matches case-sensitively. A44 lists the lowercase names only. Spec says: "Comma-separated list of conditions", no trimming or case rule. -->
 
 A route-level `retry_policy` that is present always takes precedence over the
 virtual host's, even if it yields no retryable status codes. If the resulting

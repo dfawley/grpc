@@ -5,7 +5,7 @@
 
 # `least_request` LB Policy
 
-<!-- Sources: A48, A61, grpc/service_config/service_config.proto (LeastRequestLocalityLoadBalancingPolicyConfig) -->
+<!-- Sources: A48, A61 -->
 
 > **Experimental:** The policy is registered as
 > `least_request_experimental`. Its name and configuration are not yet
@@ -27,15 +27,13 @@ Registered name: `least_request_experimental`.
 
 ## 2. Configuration
 
-Proto: `LeastRequestLocalityLoadBalancingPolicyConfig` in `grpc/service_config/service_config.proto`.
-
 ```json
 { "least_request_experimental": { "choiceCount": 2 } }
 ```
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `choiceCount` | uint64 | No | `2` | Number of READY endpoints sampled per pick ([Picker Implementation](#4-picker-implementation)). Values below 2 make the config invalid. Values above 10 are treated as 10. |
+| `choiceCount` | uint32 | No | `2` | Number of READY endpoints sampled per pick ([Picker Implementation](#4-picker-implementation)). Values below 2 make the config invalid. Values above 10 are treated as 10. |
 
 ### 2.1 Other Inputs
 
@@ -43,8 +41,8 @@ None.
 
 ### 2.2 Validation
 
-- The config is invalid if `choiceCount` is less than 2. An invalid config
-  is rejected as described in
+- The config is invalid if `choiceCount` is present and is not a JSON
+  integer in `[2, 4294967295]`. An invalid config is rejected as described in
   [Load Balancing: LB Policy Registry and Configuration](../06-load-balancing.md#2-lb-policy-registry-and-configuration).
 
 ## 3. LB Policy Implementation
@@ -71,10 +69,14 @@ the same subchannels). The counter is keyed by endpoint identity, so it
 is retained across updates while the endpoint remains present.
 
 - The picker atomically increments the counter of the chosen endpoint
-  when it returns a Complete result.
-- The picker attaches a call tracker that atomically decrements the
-  counter when the call finishes, whatever its status. The decrement
-  also happens when the pick is not used (see
+  when it returns a Complete result (or, alternatively, when the attempt is
+  started on a connection, as permitted by
+  [Load Balancing: Call-Completion Tracking](../06-load-balancing.md#64-call-completion-tracking)).
+- The picker attaches a call tracker (wrapping any tracker returned by the
+  child's picker, while preserving all other fields of the child's
+  Complete result, such as an authority override) that atomically
+  decrements the counter when the call finishes, whatever its status. The
+  decrement also happens when the pick is not used (see
   [Load Balancing: Call-Completion Tracking](../06-load-balancing.md#64-call-completion-tracking)).
 
 Counters can be slightly stale when read concurrently. This is accepted.
@@ -143,8 +145,8 @@ Pick(args):
 
 Sampling is with replacement, so the same endpoint can be sampled more
 than once. In CONNECTING the picker queues. In TRANSIENT_FAILURE it fails
-with an error that includes the most recent connection failure and the
-resolution note, as for `round_robin`.
+with an error that includes a child's connection failure and the
+resolution note, as for [`round_robin`](round_robin.md).
 
 ## 5. Children and Subchannels
 
@@ -152,7 +154,7 @@ resolution note, as for `round_robin`.
 
 `least_request` creates one `pick_first` child per endpoint, with the
 child's internal health-reporting option enabled, as
-[`round_robin`](round_robin.md) does ([Update](#33-updates-from-the-parent)). Each child
+[`round_robin`](round_robin.md) does ([Updates from the Parent](#33-updates-from-the-parent)). Each child
 receives its endpoint with that endpoint's attributes, plus the
 resolution note and the top-level attributes.
 
@@ -169,7 +171,7 @@ children as follows:
 
 - `UpdateState(state, status, picker)`: Records the child's state and
   picker. If the state is IDLE, calls the child's `ExitIdle()`. Recomputes
-  the aggregate state ([Update](#33-updates-from-the-parent)) and reports a new picker
+  the aggregate state ([Updates from the Parent](#33-updates-from-the-parent)) and reports a new picker
   ([Picker Implementation](#4-picker-implementation)). While an update is
   being applied to the children, the aggregate is reported only once,
   after all children are updated.

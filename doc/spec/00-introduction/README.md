@@ -36,10 +36,11 @@ The specification covers the following cross-language areas:
 | Wire protocol: gRPC over HTTP/2 and HTTP/3, transport behavior, the true-binary-metadata extension, the Protocol Buffers mapping | [Wire Protocol](../03-wire-protocol/README.md) |
 | The client channel: targets, name resolution, service config, per-call configuration, load balancing and the standard LB policies, subchannels, proxies, client-side health checking, retries and hedging | [Client Channel](../04-client-channel/README.md) |
 | The server: listeners, connection management, method dispatch, server-side limits | [Server](../05-server/README.md) |
-| Security: channel and call credentials, TLS, authorization | [Security](../06-security/README.md) |
+| Security: channel and call credentials, TLS, ALTS, authorization | [Security](../06-security/README.md) |
 | Standard services: health, reflection, backend metrics (ORCA), admin interface | [Standard Services](../07-services/README.md) |
 | Observability: instrumentation points, metrics, tracing, channelz, binary logging | [Observability](../08-observability/README.md) |
 | xDS (proxyless service mesh): bootstrap, XdsClient, resources, client and server data planes, xDS LB policies, xDS HTTP filters, security, load reporting, CSDS | [xDS](../09-xds/README.md) |
+| Vendor-specific features: Google default credentials, the `google-c2p` resolver | [Vendor-Specific Features](../10-vendor-specific/README.md) |
 
 The following are out of scope:
 
@@ -49,7 +50,28 @@ The following are out of scope:
 - Internal implementation structure, except where an internal plugin interface
   (for example, the name resolver, LB policy, or picker interface) must be
   described for components to be interchangeable.
-- Features that are not part of the cross-language gRPC feature set.
+- Features and protocols that are outside the cross-language core specification,
+  including:
+  - browser-bridge protocols such as gRPC-Web (`doc/PROTOCOL-WEB.md`);
+  - superseded mechanisms such as `grpclb` load balancing and OpenCensus
+    observability (summarized for historical context in
+    [Appendix E](../appendices/e-historical.md));
+  - environment- or IPC-specific transport credentials other than those in
+    [Security](../06-security/README.md) and
+    [Vendor-Specific Features](../10-vendor-specific/README.md) (such as S2A
+    and OS-level local credentials);
+  - platform-specific or experimental wire transports (such as Android Binder
+    IPC transports);
+  - unfinalized or implementation-specific observability and socket features
+    (such as Channelz v2 and socket-level DSCP/QoS marking).
+
+### 2.1 Vendor-Specific Features
+
+[Vendor-Specific Features](../10-vendor-specific/README.md) specifies features
+that are tied to one vendor's infrastructure, such as credentials and resolvers
+that depend on a cloud provider's metadata server or control plane.
+Implementations MAY provide these features. An implementation that provides
+one MUST implement it as specified there, under the names given there.
 
 ## 3. Requirements Language
 
@@ -142,15 +164,16 @@ the same observable results.
   example, `grpc-timeout`). All reserved keys are listed in
   [Appendix A](../appendices/a-metadata-keys.md).
 - **Configuration.** gRPC consumes configuration (service config, LB policy
-  configs, xDS bootstrap) in JSON. Field names are given in the JSON (lower
-  camel case) form, for example `maxRequestMessageBytes`. Where a protobuf
-  schema defines the structure, the schema is referenced by repository path,
-  for example `grpc/service_config/service_config.proto` in the grpc-proto
-  repository. The JSON form is the canonical
-  [protobuf JSON mapping](https://protobuf.dev/programming-guides/proto3/#json)
-  of that schema. In particular, `google.protobuf.Duration` values are JSON
-  strings such as `"1.5s"`, and 64-bit integers are JSON strings. An index of
-  all schemas is in [Appendix C](../appendices/c-schemas.md).
+  configs, xDS bootstrap, authorization policies, and SPIFFE trust bundle maps)
+  in JSON. Fields are named by their JSON field names, for example
+  `maxRequestMessageBytes`. In JSON schemas, a `Duration` is a JSON string
+  holding a decimal number of seconds with up to 9 fractional digits and an `s`
+  suffix (for example, `"1.5s"` or `"0.000340012s"`), and 64-bit integer fields
+  (`int64`, `uint64`) are encoded as base-10 JSON strings, with JSON numbers
+  also accepted (see
+  [Service Config: Format](../04-client-channel/04-service-config.md#1-format)).
+  An index of all protocol buffer and JSON schemas is in
+  [Appendix C](../appendices/c-schemas.md).
 - **xDS resources** are identified by their Envoy API type names (for example,
   `envoy.config.cluster.v3.Cluster`) and fields by their proto field names.
 - **Sizes** use binary prefixes: 1 KiB = 1024 bytes, 1 MiB = 1024 KiB.

@@ -5,7 +5,7 @@
 
 # `xds_cluster_manager` LB Policy
 
-<!-- Sources: A28, A31, A74, grpc-proto grpc/service_config/service_config.proto -->
+<!-- Sources: A28, A31, A74 -->
 
 > **Experimental:** This policy is registered as `xds_cluster_manager_experimental`.
 
@@ -50,21 +50,18 @@ Registered name: `xds_cluster_manager_experimental`.
 <!-- /XDS-LB-TREE -->
 
 `xds_cluster_manager` is the top-level policy, selected by the service config
-that the xds resolver generates. Its children are one `cds` policy per cluster
-that the route configuration references and one policy per cluster specifier
-plugin (an `rls` policy for the RLS plugin).
+that the xds resolver generates, and its children are one `cds` policy per
+cluster that the route configuration references and one policy per cluster
+specifier plugin (an `rls` policy for the RLS plugin).
 
 ## 2. Configuration
-
-Proto: `XdsClusterManagerLoadBalancingPolicyConfig` in
-`grpc/service_config/service_config.proto`.
 
 ```json
 {
   "xds_cluster_manager_experimental": {
     "children": {
       "cluster:cluster_a": {
-        "childPolicy": [ { "cds_experimental": { "cluster": "cluster_a" } } ]
+        "childPolicy": [ { "child_policy_name": {} } ]
       }
     }
   }
@@ -119,11 +116,13 @@ it does not report pickers.
 #### Child Deactivation and Retention
 
 Children not in the new config are **deactivated**. A deactivated child is
-left out of the picker and of the aggregated state. It SHOULD be kept for 15
-minutes and then destroyed. If a later config names it again within that
-time, it is reactivated.
-<!-- REVIEW(divergence) [XDS_LB-3]: retention of removed children (no gRFC specifies one). Java: 15-minute deletion timer (ClusterManagerLoadBalancer.java); Go: removed immediately, caching disabled (SubBalancerCloseTimeout 0, internal/xds/balancer/clustermanager/clustermanager.go); C++: 15 minutes (kChildRetentionInterval, xds_cluster_manager.cc). spec says: SHOULD keep 15 minutes (majority). With two-phase cluster removal ([Cluster references and two-phase removal](../05-client.md#54-cluster-references-and-two-phase-removal)) a removed child can no longer be selected by any RPC, so retention only helps if the cluster comes back. Also note Java registers this policy as "cluster_manager_experimental", not "xds_cluster_manager_experimental". -->
-
+left out of the picker and of the aggregated state. An implementation MAY
+keep a deactivated child for an implementation-defined time and then destroy
+it, or MAY destroy it right away. If a later config names a child that is
+still kept, the child is reactivated. With two-phase cluster removal
+([Cluster references and two-phase removal](../05-client.md#54-cluster-references-and-two-phase-removal)),
+no RPC can pick a deactivated child, so keeping it only helps if the cluster
+comes back.
 ### 3.3 Updates from the Parent
 
 The policy keeps one child policy per entry in `children`, keyed by child
@@ -143,9 +142,7 @@ status.
 
 ### 3.4 ExitIdle
 
-Forwarded to every active child.
-
-<!-- REVIEW(divergence) [XDS_LB-9]: no implementation limits this to active children. C++ forwards ExitIdle to every child, including deactivated ones (xds_cluster_manager.cc ExitIdleLocked). Go forwards to every child in its balancer group (it keeps no deactivated children). Java does not forward requestConnection() at all: ClusterManagerLoadBalancer, CdsLoadBalancer2, and WrrLocalityLoadBalancer do not override the no-op default (LoadBalancer.java). Spec says: forwarded to every active child (and cds and xds_wrr_locality forward it to their child). -->
+Forwarded to every child, including deactivated children.
 
 ### 3.5 ResetBackoff
 
@@ -166,8 +163,6 @@ fail with status INTERNAL. The ordering guarantees in
 [Cluster references and two-phase removal](../05-client.md) mean that this
 should never happen.
 
-<!-- REVIEW(divergence) [XDS_LB-8]: status for an unknown cluster. C++ fails the pick with INTERNAL (xds_cluster_manager.cc ClusterPicker::Pick). Go returns UNAVAILABLE "unknown cluster selected for RPC" (clustermanager/picker.go), which Go treats as a drop. Java fails with UNAVAILABLE "CDS encountered error..." (ClusterManagerLoadBalancer.getSubchannelPicker). A Java fail result makes wait_for_ready RPCs queue. Spec says: the pick MUST fail with INTERNAL. -->
-
 ## 5. Children and Subchannels
 
 ### 5.1 Child Policies
@@ -181,8 +176,8 @@ produced by a cluster specifier plugin, such as
 (see [Generated service config](../05-client.md#41-generated-service-config)).
 The policy itself does not interpret child names.
 
-`ExitIdle()` is forwarded to every active child; `ResetBackoff()` and
-`Shutdown()` are forwarded to every child, including deactivated children
+`ExitIdle()`, `ResetBackoff()`, and `Shutdown()` are forwarded to every child,
+including deactivated children
 ([ExitIdle](#34-exitidle), [ResetBackoff](#35-resetbackoff),
 [Shutdown](#36-shutdown)).
 

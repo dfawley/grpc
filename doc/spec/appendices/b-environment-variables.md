@@ -5,7 +5,7 @@
 
 # Appendix B. Environment Variables
 
-<!-- Sources: doc/spec/09-xds/02-bootstrap.md, doc/spec/04-client-channel/09-proxy.md, doc/spec/08-observability/07-binary-logging.md, doc/spec/00-introduction/README.md, A1, A16, A27, A47, doc/core/default_http_proxy_mapper.md, doc/grpc_xds_bootstrap_format.md -->
+<!-- Sources: doc/spec/09-xds/02-bootstrap.md, doc/spec/04-client-channel/09-proxy.md, doc/spec/08-observability/07-binary-logging.md, doc/spec/00-introduction/README.md, A1, A16, A27, A47, doc/core/default_http_proxy_mapper.md, doc/environment_variables.md, doc/grpc_xds_bootstrap_format.md, doc/spec/06-security/05-alts.md, doc/spec/10-vendor-specific/01-google-default-credentials.md -->
 
 This appendix lists the environment variables that are part of this
 specification. Each one is permanent configuration. Its semantics are defined
@@ -15,17 +15,19 @@ normatively in the linked section.
 > Implementations also use temporary environment variables. Some guard
 > features under development, and some opt out of a behavior change for
 > backward compatibility. Those variables are **not** part of this
-> specification. Their names and existence can change at any time, and
-> conforming behavior MUST NOT depend on them. Implementations MAY also define
-> environment variables for debugging (for example, log verbosity or tracing
-> of internal components). Those are not specified here either.
+> specification. Their names and existence
+> can change at any time, and conforming behavior MUST NOT depend on them.
+> Implementations MAY also define implementation-specific runtime or debugging
+> environment variables (for example, log verbosity, tracing of internal
+> components, polling or DNS backend selection, or TLS root-certificate file
+> overrides). Those are outside this specification as well.
 
 ## B.1 xDS Bootstrap
 
 | Variable | Value | Semantics | Defined in |
 | --- | --- | --- | --- |
-| `GRPC_XDS_BOOTSTRAP` | Path of a file | The file contains the xDS bootstrap configuration as JSON. It takes precedence over `GRPC_XDS_BOOTSTRAP_CONFIG`. If the file cannot be read or is invalid, creating the XdsClient fails. | [Bootstrap](../09-xds/02-bootstrap.md) ([Bootstrap: Locating the Bootstrap Configuration](../09-xds/02-bootstrap.md#1-locating-the-bootstrap-configuration)) |
-| `GRPC_XDS_BOOTSTRAP_CONFIG` | JSON text | The bootstrap configuration itself. Used only if `GRPC_XDS_BOOTSTRAP` is not set. The precedence of any programmatic configuration is implementation-defined. | [Bootstrap](../09-xds/02-bootstrap.md) ([Bootstrap: Locating the Bootstrap Configuration](../09-xds/02-bootstrap.md#1-locating-the-bootstrap-configuration)) |
+| `GRPC_XDS_BOOTSTRAP` | Path of a file | The file contains the xDS bootstrap configuration as JSON. It takes precedence over `GRPC_XDS_BOOTSTRAP_CONFIG`. If the file cannot be read or is invalid, creating the XdsClient fails. An empty value counts as set (and fails). | [Bootstrap](../09-xds/02-bootstrap.md) ([Bootstrap: Locating the Bootstrap Configuration](../09-xds/02-bootstrap.md#1-locating-the-bootstrap-configuration)) |
+| `GRPC_XDS_BOOTSTRAP_CONFIG` | JSON text | The bootstrap configuration itself. Used only if `GRPC_XDS_BOOTSTRAP` is not set. An empty value counts as set (and fails). The precedence of any programmatic configuration is implementation-defined. | [Bootstrap](../09-xds/02-bootstrap.md) ([Bootstrap: Locating the Bootstrap Configuration](../09-xds/02-bootstrap.md#1-locating-the-bootstrap-configuration)) |
 
 The process-wide bootstrap configuration MAY be read only once, when the first
 XdsClient that needs it is created. Changing these variables after that might
@@ -69,3 +71,15 @@ Notes:
 | Variable | Value | Semantics | Defined in |
 | --- | --- | --- | --- |
 | `GRPC_BINARY_LOG_FILTER` | Binary log filter configuration string | Turns on binary logging without code changes. It selects which methods are logged and how much of their headers and messages is kept. An empty string logs nothing. A malformed value MUST NOT result in logging with a partial configuration, and SHOULD make gRPC fail at initialization. An API option that accepts the same string is equivalent. | [Binary Logging](../08-observability/07-binary-logging.md) ([Binary Logging: Enabling Binary Logging](../08-observability/07-binary-logging.md#1-enabling-binary-logging), [Binary Logging: Configuration String](../08-observability/07-binary-logging.md#5-configuration-string)) |
+
+## B.4 ALTS
+
+| Variable | Value | Semantics | Defined in |
+| --- | --- | --- | --- |
+| `GRPC_ALTS_MAX_CONCURRENT_HANDSHAKES` | Positive integer | The maximum number of ALTS handshakes that have a handshaker service stream open at the same time. The default, any upper bound, and whether client and server handshakes share one limit are implementation-defined (recommended: default 100, separate limits). | [ALTS](../06-security/05-alts.md) ([ALTS: Handshaker Service](../06-security/05-alts.md#2-handshaker-service)) |
+
+## B.5 Vendor-Specific Features
+
+| Variable | Value | Semantics | Defined in |
+| --- | --- | --- | --- |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path of a file | The Google credentials file that Application Default Credentials use first. Defined by Google's Application Default Credentials procedure, not by gRPC. | [Google Call Credentials](../10-vendor-specific/05-google-call-credentials.md) ([Google Call Credentials: Application Default Credentials](../10-vendor-specific/05-google-call-credentials.md#2-application-default-credentials)) |
